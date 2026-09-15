@@ -1,435 +1,547 @@
-<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-    <title>Sitekey</title>
-
-    <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-            font-family: Arial, Helvetica, sans-serif;
-        }
-
-        body {
-            background: #f2f2f2;
-            min-height: 100vh;
-        }
-
-        .container {
-            width: 100%;
-            max-width: 900px;
-            margin: auto;
-            padding: 30px 20px;
-        }
-
-        h1 {
-            text-align: center;
-            margin-bottom: 8px;
-        }
-
-        .subtitulo {
-            text-align: center;
-            color: #666;
-            margin-bottom: 30px;
-        }
-
-        .painel {
-            background: white;
-            border-radius: 15px;
-            padding: 25px;
-            box-shadow: 0 3px 15px rgba(0,0,0,0.08);
-        }
-
-        .status {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            margin-bottom: 20px;
-            font-weight: bold;
-        }
-
-        .bolinha {
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-            background: #888;
-        }
-
-        .online {
-            background: #20b455;
-        }
-
-        .offline {
-            background: #d33;
-        }
-
-        .botoes {
-            display: flex;
-            gap: 10px;
-            margin-bottom: 25px;
-            flex-wrap: wrap;
-        }
-
-        button {
-            border: none;
-            border-radius: 8px;
-            padding: 12px 18px;
-            cursor: pointer;
-            font-size: 15px;
-            font-weight: bold;
-        }
-
-        .atualizar {
-            background: #1769e0;
-            color: white;
-        }
-
-        .atualizar:hover {
-            background: #0f55bb;
-        }
-
-        .arquivo {
-            border: 1px solid #ddd;
-            border-radius: 10px;
-            padding: 16px;
-            margin-bottom: 12px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 15px;
-        }
+from flask import Flask, request, jsonify, send_file
+import requests
+import time
+import os
+from pathlib import Path
+from datetime import datetime
 
-        .informacoes {
-            flex: 1;
-        }
+app = Flask(__name__)
 
-        .nome {
-            font-weight: bold;
-            margin-bottom: 6px;
-        }
+# ==========================================================
+# CONFIGURAÇÕES
+# ==========================================================
 
-        .data {
-            color: #777;
-            font-size: 14px;
-        }
+ARQUIVO = "config_te.txt"
 
-        .acoes {
-            display: flex;
-            gap: 8px;
-        }
+PASTA_ARQUIVOS = Path("arquivos")
+PASTA_ARQUIVOS.mkdir(parents=True, exist_ok=True)
 
-        .baixar {
-            background: #20a464;
-            color: white;
-        }
+MODO = os.environ.get("MODE", "servidor").lower()
 
-        .excluir {
-            background: #d93636;
-            color: white;
-        }
+SERVER_URL = os.environ.get(
+    "SERVER_URL",
+    ""
+).rstrip("/")
 
-        .mensagem {
-            text-align: center;
-            color: #777;
-            padding: 20px;
-        }
+# 6 horas
+SEIS_HORAS = 6 * 60 * 60
 
-        @media (max-width: 600px) {
-            .arquivo {
-                flex-direction: column;
-                align-items: stretch;
-            }
+# A cada quantos segundos verificar o arquivo/servidor
+INTERVALO = 5
 
-            .acoes {
-                width: 100%;
-            }
+# Pedido de envio imediato
+atualizacao_solicitada = False
 
-            .acoes button {
-                flex: 1;
-            }
-        }
-    </style>
-</head>
 
-<body>
+# ==========================================================
+# CORS
+# ==========================================================
 
-<div class="container">
+@app.after_request
+def adicionar_cors(resposta):
 
-    <h1>Sitekey</h1>
+    resposta.headers["Access-Control-Allow-Origin"] = "*"
 
-    <p class="subtitulo">
-        Gerenciamento de arquivos
-    </p>
+    resposta.headers["Access-Control-Allow-Methods"] = (
+        "GET, POST, DELETE, OPTIONS"
+    )
 
-    <div class="painel">
+    resposta.headers["Access-Control-Allow-Headers"] = (
+        "Content-Type"
+    )
 
-        <div class="status">
-            <div id="bolinha" class="bolinha"></div>
-            <span id="statusTexto">Verificando servidor...</span>
-        </div>
+    return resposta
 
-        <div class="botoes">
-            <button class="atualizar" onclick="solicitarAtualizacao()">
-                🔄 Atualizar arquivo
-            </button>
-        </div>
 
-        <div id="lista">
-            <div class="mensagem">
-                Carregando arquivos...
-            </div>
-        </div>
+# ==========================================================
+# SERVIDOR
+# ==========================================================
 
-    </div>
+@app.route("/")
+def index():
 
-</div>
+    return jsonify({
+        "servidor": "Sitekey",
+        "status": "online",
+        "modo": MODO
+    })
 
-<script>
 
-    /*
-       COLOQUE AQUI A URL DO SEU RENDER.
+# ==========================================================
+# LISTAR ARQUIVOS
+# ==========================================================
 
-       Exemplo:
-       https://sitekey-xxxx.onrender.com
+@app.route("/arquivos")
+def listar_arquivos():
 
-       NÃO coloque / no final.
-    */
+    arquivos = []
 
-    const SERVIDOR = "https://sitekey-nvbunpbspnbnbrpnu.onrender.com";
+    if not PASTA_ARQUIVOS.exists():
+        return jsonify({
+            "sucesso": True,
+            "arquivos": []
+        })
 
+    for arquivo in PASTA_ARQUIVOS.iterdir():
 
-    // =========================================================
-    // VERIFICAR SERVIDOR
-    // =========================================================
+        if not arquivo.is_file():
+            continue
 
-    async function verificarServidor() {
+        try:
 
-        try {
+            dados = arquivo.stat()
 
-            const resposta = await fetch(SERVIDOR + "/status");
+            data = datetime.fromtimestamp(
+                dados.st_mtime
+            )
 
-            if (!resposta.ok) {
-                throw new Error("Servidor offline");
-            }
+            arquivos.append({
+                "id": arquivo.name,
+                "nome": ARQUIVO,
+                "data": data.strftime("%d/%m/%Y"),
+                "hora": data.strftime("%H:%M:%S"),
+                "timestamp": dados.st_mtime
+            })
 
-            const dados = await resposta.json();
+        except Exception:
+            continue
 
-            document.getElementById("bolinha").className =
-                "bolinha online";
+    arquivos.sort(
+        key=lambda x: x["timestamp"],
+        reverse=True
+    )
 
-            document.getElementById("statusTexto").textContent =
-                "Servidor online";
+    return jsonify({
+        "sucesso": True,
+        "arquivos": arquivos
+    })
 
-        } catch (erro) {
 
-            document.getElementById("bolinha").className =
-                "bolinha offline";
+# ==========================================================
+# PEDIR ENVIO IMEDIATO
+# ==========================================================
 
-            document.getElementById("statusTexto").textContent =
-                "Servidor offline";
-        }
-    }
+@app.route("/atualizar", methods=["POST"])
+def atualizar():
 
+    global atualizacao_solicitada
 
-    // =========================================================
-    // LISTAR ARQUIVOS
-    // =========================================================
+    atualizacao_solicitada = True
 
-    async function carregarArquivos() {
+    print("Pedido de envio imediato recebido.")
 
-        const lista = document.getElementById("lista");
+    return jsonify({
+        "sucesso": True,
+        "mensagem": "Pedido enviado."
+    })
 
-        try {
 
-            const resposta =
-                await fetch(SERVIDOR + "/arquivos");
+# ==========================================================
+# COMPUTADOR VERIFICA PEDIDO
+# ==========================================================
 
-            if (!resposta.ok) {
-                throw new Error("Erro");
-            }
+@app.route("/verificar")
+def verificar():
 
-            const dados = await resposta.json();
+    return jsonify({
+        "atualizar": atualizacao_solicitada
+    })
 
-            lista.innerHTML = "";
 
-            if (!dados.arquivos || dados.arquivos.length === 0) {
+# ==========================================================
+# RECEBER ARQUIVO
+# ==========================================================
 
-                lista.innerHTML = `
-                    <div class="mensagem">
-                        Nenhum arquivo recebido ainda.
-                    </div>
-                `;
+@app.route("/upload", methods=["POST"])
+def upload():
 
-                return;
-            }
+    global atualizacao_solicitada
 
+    if "arquivo" not in request.files:
 
-            dados.arquivos.forEach(arquivo => {
+        return jsonify({
+            "sucesso": False,
+            "erro": "Arquivo não enviado."
+        }), 400
 
-                const div = document.createElement("div");
+    arquivo = request.files["arquivo"]
 
-                div.className = "arquivo";
+    if not arquivo.filename:
 
-                div.innerHTML = `
+        return jsonify({
+            "sucesso": False,
+            "erro": "Arquivo inválido."
+        }), 400
 
-                    <div class="informacoes">
+    agora = datetime.now()
 
-                        <div class="nome">
-                            📄 ${arquivo.nome}
-                        </div>
+    nome = (
+        "config_te_"
+        + agora.strftime("%Y-%m-%d_%H-%M-%S")
+        + ".txt"
+    )
 
-                        <div class="data">
-                            Enviado em ${arquivo.data}
-                            às ${arquivo.hora}
-                        </div>
+    caminho = PASTA_ARQUIVOS / nome
 
-                    </div>
+    contador = 1
 
-                    <div class="acoes">
+    while caminho.exists():
 
-                        <button
-                            class="baixar"
-                            onclick="baixarArquivo('${encodeURIComponent(arquivo.id)}')">
-                            Baixar
-                        </button>
+        nome = (
+            "config_te_"
+            + agora.strftime("%Y-%m-%d_%H-%M-%S")
+            + f"_{contador}.txt"
+        )
 
-                        <button
-                            class="excluir"
-                            onclick="excluirArquivo('${encodeURIComponent(arquivo.id)}')">
-                            Excluir
-                        </button>
+        caminho = PASTA_ARQUIVOS / nome
 
-                    </div>
-                `;
+        contador += 1
 
-                lista.appendChild(div);
+    arquivo.save(caminho)
 
-            });
+    atualizacao_solicitada = False
 
-        } catch (erro) {
+    print(
+        f"Arquivo recebido: {nome}"
+    )
 
-            lista.innerHTML = `
-                <div class="mensagem">
-                    Não foi possível carregar os arquivos.
-                </div>
-            `;
-        }
-    }
+    return jsonify({
+        "sucesso": True,
+        "arquivo": nome,
+        "data": agora.strftime("%d/%m/%Y"),
+        "hora": agora.strftime("%H:%M:%S")
+    })
 
 
-    // =========================================================
-    // SOLICITAR ATUALIZAÇÃO
-    // =========================================================
+# ==========================================================
+# DOWNLOAD
+# ==========================================================
 
-    async function solicitarAtualizacao() {
+@app.route("/baixar/<nome>")
+def baixar(nome):
 
-        try {
+    nome = os.path.basename(nome)
 
-            const resposta =
-                await fetch(SERVIDOR + "/atualizar", {
-                    method: "POST"
-                });
+    caminho = PASTA_ARQUIVOS / nome
 
-            const dados = await resposta.json();
+    if not caminho.exists():
 
-            if (dados.sucesso) {
+        return jsonify({
+            "erro": "Arquivo não encontrado."
+        }), 404
 
-                alert(
-                    "Atualização solicitada!\n\n" +
-                    "O computador secundário enviará o config_te.txt."
-                );
+    return send_file(
+        caminho,
+        as_attachment=True,
+        download_name=ARQUIVO
+    )
 
-            } else {
 
-                alert("Não foi possível solicitar a atualização.");
-            }
+# ==========================================================
+# EXCLUIR SOMENTE A CÓPIA DO SERVIDOR
+# ==========================================================
 
-        } catch (erro) {
+@app.route("/excluir/<nome>", methods=["DELETE"])
+def excluir(nome):
 
-            alert(
-                "Não foi possível conectar ao servidor."
-            );
-        }
-    }
+    nome = os.path.basename(nome)
 
+    caminho = PASTA_ARQUIVOS / nome
 
-    // =========================================================
-    // BAIXAR
-    // =========================================================
+    if not caminho.exists():
 
-    function baixarArquivo(nome) {
+        return jsonify({
+            "sucesso": False,
+            "erro": "Arquivo não encontrado."
+        }), 404
 
-        window.location.href =
-            SERVIDOR + "/baixar/" + nome;
-    }
+    try:
 
+        caminho.unlink()
 
-    // =========================================================
-    // EXCLUIR
-    // =========================================================
+        return jsonify({
+            "sucesso": True,
+            "mensagem": "Arquivo excluído do servidor."
+        })
 
-    async function excluirArquivo(nome) {
+    except Exception as erro:
 
-        const confirmar = confirm(
-            "Deseja realmente excluir este arquivo?"
-        );
+        return jsonify({
+            "sucesso": False,
+            "erro": str(erro)
+        }), 500
 
-        if (!confirmar) {
-            return;
-        }
 
-        try {
+# ==========================================================
+# ENVIAR ARQUIVO
+# ==========================================================
 
-            const resposta =
-                await fetch(
-                    SERVIDOR + "/excluir/" + nome,
-                    {
-                        method: "DELETE"
-                    }
-                );
+def enviar_arquivo(caminho):
 
-            const dados = await resposta.json();
+    try:
 
-            if (dados.sucesso) {
+        with open(caminho, "rb") as arquivo:
 
-                carregarArquivos();
+            resposta = requests.post(
 
-            } else {
+                SERVER_URL + "/upload",
 
-                alert(
-                    dados.erro || "Não foi possível excluir."
-                );
-            }
+                files={
+                    "arquivo": (
+                        ARQUIVO,
+                        arquivo,
+                        "text/plain"
+                    )
+                },
 
-        } catch (erro) {
+                timeout=30
+            )
 
-            alert(
-                "Não foi possível conectar ao servidor."
-            );
-        }
-    }
+        if resposta.status_code == 200:
 
+            print(
+                "config_te.txt enviado com sucesso."
+            )
 
-    // =========================================================
-    // INICIALIZAÇÃO
-    // =========================================================
+            return True
 
-    verificarServidor();
-    carregarArquivos();
+        print(
+            "Erro no upload:"
+        )
 
-    // Atualiza a lista automaticamente a cada 5 segundos
-    setInterval(() => {
+        print(
+            resposta.text
+        )
 
-        verificarServidor();
-        carregarArquivos();
+        return False
 
-    }, 5000);
+    except Exception as erro:
 
-</script>
+        print(
+            "Erro ao enviar:",
+            erro
+        )
 
-</body>
-</html>
+        return False
+
+
+# ==========================================================
+# COMPUTADOR QUE POSSUI CONFIG_TE.TXT
+# ==========================================================
+
+def executar_computador():
+
+    if not SERVER_URL:
+
+        print(
+            "ERRO: SERVER_URL não configurado."
+        )
+
+        return
+
+    caminho = Path(ARQUIVO)
+
+    print()
+    print("==============================")
+    print("       SITEKEY - PC")
+    print("==============================")
+    print()
+
+    print(
+        "Servidor:",
+        SERVER_URL
+    )
+
+    print(
+        "Arquivo:",
+        caminho.absolute()
+    )
+
+    print(
+        "Envio automático: 6 horas"
+    )
+
+    print()
+
+    # ------------------------------------------------------
+    # Guarda a última versão enviada automaticamente.
+    # ------------------------------------------------------
+
+    arquivo_controle = Path(
+        ".sitekey_controle"
+    )
+
+    ultima_versao_enviada = ""
+
+    if arquivo_controle.exists():
+
+        try:
+
+            ultima_versao_enviada = (
+                arquivo_controle.read_text().strip()
+            )
+
+        except Exception:
+            ultima_versao_enviada = ""
+
+    # ------------------------------------------------------
+    # Guarda quando o arquivo foi detectado.
+    # ------------------------------------------------------
+
+    inicio_contagem = None
+
+    versao_detectada = None
+
+    while True:
+
+        try:
+
+            if not caminho.exists():
+
+                print(
+                    "config_te.txt ainda não existe."
+                )
+
+                time.sleep(INTERVALO)
+
+                continue
+
+            dados = caminho.stat()
+
+            modificacao = dados.st_mtime
+
+            tamanho = dados.st_size
+
+            # Identificação da versão atual
+            versao = f"{modificacao}_{tamanho}"
+
+            # --------------------------------------------------
+            # Detectou criação ou alteração
+            # --------------------------------------------------
+
+            if versao != versao_detectada:
+
+                versao_detectada = versao
+
+                inicio_contagem = time.time()
+
+                print()
+                print(
+                    "Nova versão do config_te.txt detectada."
+                )
+
+                print(
+                    "Contagem de 6 horas iniciada."
+                )
+
+            # --------------------------------------------------
+            # PEDIDO MANUAL PELO SITE
+            # --------------------------------------------------
+
+            try:
+
+                resposta = requests.get(
+                    SERVER_URL + "/verificar",
+                    timeout=10
+                )
+
+                if resposta.status_code == 200:
+
+                    dados_pedido = resposta.json()
+
+                    if dados_pedido.get("atualizar"):
+
+                        print()
+                        print(
+                            "Pedido manual recebido."
+                        )
+
+                        # Envia imediatamente a versão atual
+                        if enviar_arquivo(caminho):
+
+                            # O servidor automaticamente
+                            # limpa o pedido depois do upload.
+
+                            pass
+
+            except requests.exceptions.RequestException:
+
+                pass
+
+            # --------------------------------------------------
+            # 6 HORAS
+            # --------------------------------------------------
+
+            if (
+                inicio_contagem is not None
+                and
+                time.time() - inicio_contagem >= SEIS_HORAS
+                and
+                versao != ultima_versao_enviada
+            ):
+
+                print()
+                print(
+                    "6 horas concluídas."
+                )
+
+                print(
+                    "Enviando automaticamente..."
+                )
+
+                if enviar_arquivo(caminho):
+
+                    ultima_versao_enviada = versao
+
+                    arquivo_controle.write_text(
+                        ultima_versao_enviada
+                    )
+
+                    print(
+                        "Envio automático concluído."
+                    )
+
+                    inicio_contagem = None
+
+            time.sleep(INTERVALO)
+
+        except Exception as erro:
+
+            print(
+                "Erro:",
+                erro
+            )
+
+            time.sleep(INTERVALO)
+
+
+# ==========================================================
+# INICIALIZAÇÃO
+# ==========================================================
+
+if __name__ == "__main__":
+
+    if MODO == "secundario":
+
+        executar_computador()
+
+    else:
+
+        print()
+        print("==============================")
+        print("          SITEKEY")
+        print("==============================")
+        print()
+
+        porta = int(
+            os.environ.get(
+                "PORT",
+                "5000"
+            )
+        )
+
+        app.run(
+            host="0.0.0.0",
+            port=porta,
+            debug=False
+        )
