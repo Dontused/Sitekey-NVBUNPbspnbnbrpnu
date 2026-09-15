@@ -1,466 +1,187 @@
-from flask import Flask, request, jsonify, send_file, render_template_string
+from flask import Flask, request, jsonify, send_file
 import requests
 import threading
 import time
 import os
+from pathlib import Path
+from datetime import datetime
+from urllib.parse import quote
 
-app = Flask(__name__)
 
 # ==========================================================
 # CONFIGURAÇÕES
 # ==========================================================
 
+app = Flask(__name__)
+
 ARQUIVO = "config_te.txt"
 
-# Se estiver testando no mesmo computador:
-SERVIDOR = "http://127.0.0.1:5000"
+# Pasta para os arquivos recebidos
+PASTA_ARQUIVOS = Path("arquivos")
 
-# Quando colocar o site na internet, troque para:
-# SERVIDOR = "https://seu-site.com"
+PASTA_ARQUIVOS.mkdir(
+    parents=True,
+    exist_ok=True
+)
 
-INTERVALO = 1
+# ==========================================================
+# MODO DE EXECUÇÃO
+# ==========================================================
+#
+# No Render:
+#
+#   MODE=servidor
+#
+# No computador secundário:
+#
+#   MODE=secundario
+#
+# ==========================================================
 
-# Pedido para atualizar o arquivo
+MODO = os.environ.get(
+    "MODE",
+    "servidor"
+).lower()
+
+
+# ==========================================================
+# ENDEREÇO DO SERVIDOR
+# ==========================================================
+#
+# No computador secundário você deverá configurar:
+#
+# SERVER_URL=https://seu-app.onrender.com
+#
+# ==========================================================
+
+SERVER_URL = os.environ.get(
+    "SERVER_URL",
+    ""
+).rstrip("/")
+
+
+# Intervalo entre verificações do computador secundário
+INTERVALO = 2
+
+
+# Pedido de atualização
 atualizacao_solicitada = False
 
 
-# ==========================================================
-# PÁGINA
-# ==========================================================
-
-HTML = """
-
-<!DOCTYPE html>
-
-<html lang="pt-BR">
-
-<head>
-
-<meta charset="UTF-8">
-
-<meta name="viewport"
-content="width=device-width, initial-scale=1.0">
-
-<title>Sitekey</title>
-
-<style>
-
-* {
-    box-sizing: border-box;
-    font-family: Arial, Helvetica, sans-serif;
-}
-
-body {
-
-    margin: 0;
-
-    min-height: 100vh;
-
-    background: #f2f2f2;
-
-    display: flex;
-
-    justify-content: center;
-
-    align-items: center;
-
-}
-
-.container {
-
-    width: 90%;
-
-    max-width: 450px;
-
-    background: white;
-
-    padding: 30px;
-
-    border-radius: 15px;
-
-    box-shadow:
-        0 10px 30px
-        rgba(0,0,0,0.15);
-
-    text-align: center;
-
-}
-
-h1 {
-
-    margin-top: 0;
-
-    margin-bottom: 25px;
-
-}
-
-.arquivo {
-
-    background: #f5f5f5;
-
-    padding: 20px;
-
-    border-radius: 10px;
-
-    margin-bottom: 20px;
-
-}
-
-.nome {
-
-    font-size: 18px;
-
-    font-weight: bold;
-
-}
-
-.status {
-
-    margin-top: 8px;
-
-    color: #666;
-
-    font-size: 14px;
-
-}
-
-.botoes {
-
-    display: flex;
-
-    flex-direction: column;
-
-    gap: 10px;
-
-}
-
-button,
-.botao {
-
-    width: 100%;
-
-    padding: 14px;
-
-    border: none;
-
-    border-radius: 8px;
-
-    font-size: 16px;
-
-    cursor: pointer;
-
-    text-decoration: none;
-
-    display: block;
-
-}
-
-.atualizar {
-
-    background: #4CAF50;
-
-    color: white;
-
-}
-
-.baixar {
-
-    background: #2196F3;
-
-    color: white;
-
-}
-
-.excluir {
-
-    background: #f44336;
-
-    color: white;
-
-}
-
-button:hover,
-.botao:hover {
-
-    opacity: 0.85;
-
-}
-
-#mensagem {
-
-    margin-top: 20px;
-
-    font-weight: bold;
-
-}
-
-</style>
-
-</head>
-
-
-<body>
-
-
-<div class="container">
-
-
-<h1>📁 Sitekey</h1>
-
-
-<div class="arquivo">
-
-{% if existe %}
-
-<div class="nome">
-
-📄 config_te.txt
-
-</div>
-
-<div class="status">
-
-Arquivo disponível
-
-</div>
-
-{% else %}
-
-<div class="nome">
-
-📄 config_te.txt
-
-</div>
-
-<div class="status">
-
-Nenhum arquivo disponível
-
-</div>
-
-{% endif %}
-
-</div>
-
-
-<div class="botoes">
-
-
-<button
-class="atualizar"
-onclick="atualizar()">
-
-🔄 Atualizar arquivo
-
-</button>
-
-
-{% if existe %}
-
-<a
-class="botao baixar"
-href="/baixar">
-
-📥 Baixar arquivo
-
-</a>
-
-
-<form
-action="/excluir"
-method="POST"
-onsubmit="return confirm(
-'Tem certeza que deseja excluir o arquivo?'
-);">
-
-<button
-class="excluir"
-type="submit">
-
-🗑️ Excluir
-
-</button>
-
-</form>
-
-{% endif %}
-
-
-</div>
-
-
-<div id="mensagem"></div>
-
-
-</div>
-
-
-<script>
-
-
-async function atualizar() {
-
-
-const mensagem =
-document.getElementById("mensagem");
-
-
-mensagem.innerText =
-"⏳ Solicitando atualização...";
-
-
-try {
-
-
-const resposta =
-await fetch(
-"/atualizar",
-{
-method: "POST"
-}
-);
-
-
-const dados =
-await resposta.json();
-
-
-if (dados.sucesso) {
-
-
-mensagem.innerText =
-"📡 Pedido enviado. Aguardando arquivo...";
-
-
-esperarArquivo();
-
-
-}
-
-
-}
-
-catch (erro) {
-
-
-mensagem.innerText =
-"❌ Erro de conexão.";
-
-}
-
-}
-
-
-// ========================================================
-// ESPERAR O ARQUIVO SER ATUALIZADO
-// ========================================================
-
-function esperarArquivo() {
-
-
-let tentativas = 0;
-
-
-const intervalo =
-setInterval(
-async function() {
-
-
-tentativas++;
-
-
-try {
-
-
-const resposta =
-await fetch("/status");
-
-
-const dados =
-await resposta.json();
-
-
-if (dados.atualizado) {
-
-
-clearInterval(intervalo);
-
-
-mensagem.innerText =
-"✅ Arquivo atualizado!";
-
-
-setTimeout(
-function() {
-
-location.reload();
-
-},
-1000
-);
-
-
-}
-
-
-}
-
-catch (erro) {
-
-console.log(erro);
-
-}
-
-
-// Espera no máximo 30 segundos
-
-if (tentativas >= 30) {
-
-
-clearInterval(intervalo);
-
-
-mensagem.innerText =
-"⚠️ O dispositivo não respondeu.";
-
-}
-
-
-},
-1000
-);
-
-}
-
-
-</script>
-
-
-</body>
-
-</html>
-
-"""
+# Momento da última atualização
+ultima_atualizacao = None
 
 
 # ==========================================================
-# PÁGINA PRINCIPAL
+# CORS
+# ==========================================================
+
+@app.after_request
+def adicionar_cors(resposta):
+
+    resposta.headers["Access-Control-Allow-Origin"] = "*"
+
+    resposta.headers[
+        "Access-Control-Allow-Methods"
+    ] = "GET, POST, DELETE, OPTIONS"
+
+    resposta.headers[
+        "Access-Control-Allow-Headers"
+    ] = "Content-Type"
+
+    return resposta
+
+
+# ==========================================================
+# ROTA PRINCIPAL
 # ==========================================================
 
 @app.route("/")
 def index():
 
-    return render_template_string(
-        HTML,
-        existe=os.path.exists(ARQUIVO)
+    return jsonify({
+        "servidor": "Sitekey",
+        "status": "online",
+        "modo": MODO
+    })
+
+
+# ==========================================================
+# LISTAR ARQUIVOS
+# ==========================================================
+
+@app.route("/arquivos")
+def listar_arquivos():
+
+    arquivos = []
+
+    if not PASTA_ARQUIVOS.exists():
+
+        return jsonify({
+            "sucesso": True,
+            "arquivos": []
+        })
+
+
+    for arquivo in PASTA_ARQUIVOS.iterdir():
+
+        if not arquivo.is_file():
+            continue
+
+        try:
+
+            dados = arquivo.stat()
+
+            data = datetime.fromtimestamp(
+                dados.st_mtime
+            )
+
+            arquivos.append({
+
+                "id": arquivo.name,
+
+                "nome": ARQUIVO,
+
+                "data": data.strftime(
+                    "%d/%m/%Y"
+                ),
+
+                "hora": data.strftime(
+                    "%H:%M:%S"
+                ),
+
+                "timestamp": dados.st_mtime
+
+            })
+
+        except Exception:
+
+            continue
+
+
+    arquivos.sort(
+        key=lambda x: x["timestamp"],
+        reverse=True
     )
 
 
+    return jsonify({
+
+        "sucesso": True,
+
+        "arquivos": arquivos
+
+    })
+
+
 # ==========================================================
-# PEDIR ATUALIZAÇÃO
+# SOLICITAR ATUALIZAÇÃO
 # ==========================================================
 
-@app.route("/atualizar", methods=["POST"])
+@app.route(
+    "/atualizar",
+    methods=["POST"]
+)
 def atualizar():
 
     global atualizacao_solicitada
@@ -468,45 +189,60 @@ def atualizar():
     atualizacao_solicitada = True
 
     return jsonify({
-        "sucesso": True
-    })
 
+        "sucesso": True,
 
-# ==========================================================
-# STATUS DA ATUALIZAÇÃO
-# ==========================================================
-
-@app.route("/status")
-def status():
-
-    global atualizacao_solicitada
-
-    return jsonify({
-
-        "atualizado":
-            os.path.exists(ARQUIVO)
-            and not atualizacao_solicitada
+        "mensagem":
+            "Atualização solicitada."
 
     })
 
 
 # ==========================================================
-# VERIFICAR SE EXISTE PEDIDO
+# VERIFICAR SOLICITAÇÃO
 # ==========================================================
 
 @app.route("/verificar")
 def verificar():
 
-    global atualizacao_solicitada
+    return jsonify({
 
-    if atualizacao_solicitada:
+        "atualizar":
+            atualizacao_solicitada
 
-        return jsonify({
-            "atualizar": True
-        })
+    })
+
+
+# ==========================================================
+# STATUS
+# ==========================================================
+
+@app.route("/status")
+def status():
+
+    quantidade = 0
+
+    if PASTA_ARQUIVOS.exists():
+
+        quantidade = len([
+
+            x for x in
+            PASTA_ARQUIVOS.iterdir()
+
+            if x.is_file()
+
+        ])
+
 
     return jsonify({
-        "atualizar": False
+
+        "online": True,
+
+        "atualizado":
+            ultima_atualizacao is not None,
+
+        "arquivos": quantidade
+
     })
 
 
@@ -514,49 +250,162 @@ def verificar():
 # RECEBER ARQUIVO
 # ==========================================================
 
-@app.route("/upload", methods=["POST"])
+@app.route(
+    "/upload",
+    methods=["POST"]
+)
 def upload():
 
     global atualizacao_solicitada
+    global ultima_atualizacao
+
 
     if "arquivo" not in request.files:
 
         return jsonify({
-            "erro": "Arquivo não enviado"
+
+            "sucesso": False,
+
+            "erro":
+                "Arquivo não enviado."
+
         }), 400
 
 
-    arquivo =
-        request.files["arquivo"]
+    arquivo = request.files["arquivo"]
 
 
-    arquivo.save(ARQUIVO)
+    if not arquivo.filename:
 
+        return jsonify({
+
+            "sucesso": False,
+
+            "erro":
+                "Arquivo inválido."
+
+        }), 400
+
+
+    # ======================================================
+    # CRIA NOME ÚNICO
+    # ======================================================
+
+    agora = datetime.now()
+
+    nome = (
+        "config_te_"
+        + agora.strftime(
+            "%Y-%m-%d_%H-%M-%S"
+        )
+        + ".txt"
+    )
+
+
+    caminho = (
+        PASTA_ARQUIVOS /
+        nome
+    )
+
+
+    # Evita conflito de nomes
+    contador = 1
+
+    while caminho.exists():
+
+        nome = (
+            "config_te_"
+            + agora.strftime(
+                "%Y-%m-%d_%H-%M-%S"
+            )
+            + f"_{contador}.txt"
+        )
+
+        caminho = (
+            PASTA_ARQUIVOS /
+            nome
+        )
+
+        contador += 1
+
+
+    # ======================================================
+    # SALVA
+    # ======================================================
+
+    arquivo.save(caminho)
+
+
+    # ======================================================
+    # REGISTRA ATUALIZAÇÃO
+    # ======================================================
+
+    ultima_atualizacao = agora
 
     atualizacao_solicitada = False
 
 
+    print(
+        f"Arquivo recebido: {nome}"
+    )
+
+
     return jsonify({
-        "sucesso": True
+
+        "sucesso": True,
+
+        "arquivo": nome,
+
+        "data":
+            agora.strftime(
+                "%d/%m/%Y"
+            ),
+
+        "hora":
+            agora.strftime(
+                "%H:%M:%S"
+            )
+
     })
 
 
 # ==========================================================
-# BAIXAR
+# DOWNLOAD
 # ==========================================================
 
-@app.route("/baixar")
-def baixar():
+@app.route(
+    "/baixar/<nome>"
+)
+def baixar(nome):
 
-    if not os.path.exists(ARQUIVO):
+    # Segurança contra caminhos externos
+    nome = os.path.basename(nome)
 
-        return "Arquivo não encontrado.", 404
+
+    caminho = (
+        PASTA_ARQUIVOS /
+        nome
+    )
+
+
+    if not caminho.exists():
+
+        return jsonify({
+
+            "erro":
+                "Arquivo não encontrado."
+
+        }), 404
 
 
     return send_file(
-        ARQUIVO,
+
+        caminho,
+
         as_attachment=True,
-        download_name="config_te.txt"
+
+        download_name=ARQUIVO
+
     )
 
 
@@ -564,127 +413,295 @@ def baixar():
 # EXCLUIR
 # ==========================================================
 
-@app.route("/excluir", methods=["POST"])
-def excluir():
+@app.route(
+    "/excluir/<nome>",
+    methods=["DELETE"]
+)
+def excluir(nome):
 
-    global atualizacao_solicitada
-
-    if os.path.exists(ARQUIVO):
-
-        os.remove(ARQUIVO)
-
-
-    atualizacao_solicitada = False
+    nome = os.path.basename(nome)
 
 
-    return """
-    <script>
-        window.location.href = "/";
-    </script>
-    """
+    caminho = (
+        PASTA_ARQUIVOS /
+        nome
+    )
+
+
+    if not caminho.exists():
+
+        return jsonify({
+
+            "sucesso": False,
+
+            "erro":
+                "Arquivo não encontrado."
+
+        }), 404
+
+
+    try:
+
+        caminho.unlink()
+
+
+        return jsonify({
+
+            "sucesso": True,
+
+            "mensagem":
+                "Arquivo excluído."
+
+        })
+
+
+    except Exception as erro:
+
+        return jsonify({
+
+            "sucesso": False,
+
+            "erro": str(erro)
+
+        }), 500
 
 
 # ==========================================================
-# PROGRAMA QUE ENVIA O ARQUIVO
+# COMPUTADOR SECUNDÁRIO
 # ==========================================================
 
 def verificar_servidor():
 
-    global atualizacao_solicitada
+    global SERVER_URL
+
+
+    if not SERVER_URL:
+
+        print(
+            "ERRO: SERVER_URL não configurado."
+        )
+
+        return
+
+
+    print()
+    print(
+        "=============================="
+    )
+    print(
+        "    SITEKEY - SECUNDÁRIO"
+    )
+    print(
+        "=============================="
+    )
+    print()
+
+    print(
+        "Servidor:",
+        SERVER_URL
+    )
+
+    print(
+        "Arquivo:",
+        ARQUIVO
+    )
+
+    print()
+    print(
+        "Aguardando pedidos..."
+    )
+    print()
+
+
+    caminho_arquivo = Path(
+        ARQUIVO
+    )
+
 
     while True:
 
         try:
 
             resposta = requests.get(
-                SERVIDOR + "/verificar",
-                timeout=5
+
+                SERVER_URL
+                + "/verificar",
+
+                timeout=10
+
             )
+
+
+            if resposta.status_code != 200:
+
+                time.sleep(
+                    INTERVALO
+                )
+
+                continue
 
 
             dados = resposta.json()
 
 
+            # ==================================================
+            # RECEBEU PEDIDO DE ATUALIZAÇÃO
+            # ==================================================
+
             if dados.get("atualizar"):
 
+                print(
+                    "Atualização solicitada."
+                )
 
-                if os.path.exists(ARQUIVO):
 
+                if not caminho_arquivo.exists():
 
                     print(
-                        "Atualização solicitada."
+                        "ERRO: config_te.txt não encontrado."
                     )
 
+                    time.sleep(
+                        INTERVALO
+                    )
+
+                    continue
+
+
+                try:
 
                     with open(
-                        ARQUIVO,
+                        caminho_arquivo,
                         "rb"
                     ) as arquivo:
 
+                        resposta_upload = requests.post(
 
-                        requests.post(
-
-                            SERVIDOR + "/upload",
+                            SERVER_URL
+                            + "/upload",
 
                             files={
-                                "arquivo": arquivo
+
+                                "arquivo": (
+
+                                    ARQUIVO,
+
+                                    arquivo,
+
+                                    "text/plain"
+
+                                )
+
                             },
 
-                            timeout=10
+                            timeout=30
 
                         )
 
 
+                    if resposta_upload.status_code == 200:
+
+                        print(
+                            "config_te.txt enviado!"
+                        )
+
+                    else:
+
+                        print(
+                            "Erro no upload:"
+                        )
+
+                        print(
+                            resposta_upload.text
+                        )
+
+
+                except Exception as erro:
+
                     print(
-                        "config_te.txt enviado!"
+                        "Erro ao enviar:",
+                        erro
                     )
+
+
+        except requests.exceptions.RequestException:
+
+            print(
+                "Servidor indisponível..."
+            )
 
 
         except Exception as erro:
 
             print(
-                "Aguardando servidor..."
+                "Erro:",
+                erro
             )
 
 
-        time.sleep(INTERVALO)
+        time.sleep(
+            INTERVALO
+        )
 
 
 # ==========================================================
-# INICIAR
+# INICIAR SERVIDOR
 # ==========================================================
 
 if __name__ == "__main__":
 
 
-    # Inicia o sistema que verifica
-    # pedidos em segundo plano
+    # ======================================================
+    # MODO SECUNDÁRIO
+    # ======================================================
 
-    thread = threading.Thread(
-        target=verificar_servidor,
-        daemon=True
-    )
+    if MODO == "secundario":
 
-    thread.start()
+        verificar_servidor()
 
 
-    print("")
-    print("==============================")
-    print("        SITEKEY")
-    print("==============================")
-    print("")
-    print(
-        "Site: http://127.0.0.1:5000"
-    )
-    print("")
-    print(
-        "Aguardando pedidos..."
-    )
-    print("")
+    # ======================================================
+    # MODO SERVIDOR
+    # ======================================================
+
+    else:
+
+        print()
+        print(
+            "=============================="
+        )
+        print(
+            "          SITEKEY"
+        )
+        print(
+            "=============================="
+        )
+        print()
+
+        print(
+            "Servidor iniciado."
+        )
+
+        print()
 
 
-    app.run(
-        host="0.0.0.0",
-        port=5000,
-        debug=False
-    )
+        # Render fornece a porta através
+        # da variável PORT.
+
+        porta = int(
+            os.environ.get(
+                "PORT",
+                "5000"
+            )
+        )
+
+
+        app.run(
+
+            host="0.0.0.0",
+
+            port=porta,
+
+            debug=False
+
+        )
