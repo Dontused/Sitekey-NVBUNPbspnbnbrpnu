@@ -13,42 +13,28 @@ app = Flask(__name__)
 
 ARQUIVO = "config_te.txt"
 
-# Pasta onde o Render guarda as cópias recebidas
 PASTA_ARQUIVOS = Path("arquivos")
 PASTA_ARQUIVOS.mkdir(parents=True, exist_ok=True)
 
-# ==========================================================
-# MODO
-# ==========================================================
-
-# Render:
-# MODE=servidor
-#
-# PC que possui config_te.txt:
-# MODE=secundario
-
 MODO = os.environ.get("MODE", "servidor").lower()
-
-# ==========================================================
-# SERVIDOR
-# ==========================================================
 
 SERVER_URL = os.environ.get(
     "SERVER_URL",
     ""
 ).rstrip("/")
 
-# 6 horas em segundos
+# 6 horas
 SEIS_HORAS = 6 * 60 * 60
 
-# Intervalo de verificação
-INTERVALO = 2
+# A cada quantos segundos verificar o arquivo/servidor
+INTERVALO = 5
 
-# Pedido manual de atualização
+# Pedido de envio imediato
 atualizacao_solicitada = False
 
+
 # ==========================================================
-# CONTROLE CORS
+# CORS
 # ==========================================================
 
 @app.after_request
@@ -68,7 +54,7 @@ def adicionar_cors(resposta):
 
 
 # ==========================================================
-# ROTA PRINCIPAL
+# SERVIDOR
 # ==========================================================
 
 @app.route("/")
@@ -91,7 +77,6 @@ def listar_arquivos():
     arquivos = []
 
     if not PASTA_ARQUIVOS.exists():
-
         return jsonify({
             "sucesso": True,
             "arquivos": []
@@ -111,25 +96,14 @@ def listar_arquivos():
             )
 
             arquivos.append({
-
                 "id": arquivo.name,
-
                 "nome": ARQUIVO,
-
-                "data": data.strftime(
-                    "%d/%m/%Y"
-                ),
-
-                "hora": data.strftime(
-                    "%H:%M:%S"
-                ),
-
+                "data": data.strftime("%d/%m/%Y"),
+                "hora": data.strftime("%H:%M:%S"),
                 "timestamp": dados.st_mtime
-
             })
 
         except Exception:
-
             continue
 
     arquivos.sort(
@@ -138,83 +112,39 @@ def listar_arquivos():
     )
 
     return jsonify({
-
         "sucesso": True,
-
         "arquivos": arquivos
-
     })
 
 
 # ==========================================================
-# PEDIR ATUALIZAÇÃO MANUAL
+# PEDIR ENVIO IMEDIATO
 # ==========================================================
 
-@app.route(
-    "/atualizar",
-    methods=["POST"]
-)
+@app.route("/atualizar", methods=["POST"])
 def atualizar():
 
     global atualizacao_solicitada
 
     atualizacao_solicitada = True
 
-    print(
-        "Pedido de atualização recebido."
-    )
+    print("Pedido de envio imediato recebido.")
 
     return jsonify({
-
         "sucesso": True,
-
-        "mensagem":
-            "Pedido enviado ao computador."
-
+        "mensagem": "Pedido enviado."
     })
 
 
 # ==========================================================
-# COMPUTADOR VERIFICA SE EXISTE PEDIDO
+# COMPUTADOR VERIFICA PEDIDO
 # ==========================================================
 
 @app.route("/verificar")
 def verificar():
 
     return jsonify({
-
-        "atualizar":
-            atualizacao_solicitada
-
-    })
-
-
-# ==========================================================
-# STATUS
-# ==========================================================
-
-@app.route("/status")
-def status():
-
-    quantidade = 0
-
-    if PASTA_ARQUIVOS.exists():
-
-        quantidade = len([
-
-            x for x in
-            PASTA_ARQUIVOS.iterdir()
-
-            if x.is_file()
-
-        ])
-
-    return jsonify({
-
-        "online": True,
-
-        "arquivos": quantidade
-
+        "atualizar": atualizacao_solicitada
     })
 
 
@@ -222,10 +152,7 @@ def status():
 # RECEBER ARQUIVO
 # ==========================================================
 
-@app.route(
-    "/upload",
-    methods=["POST"]
-)
+@app.route("/upload", methods=["POST"])
 def upload():
 
     global atualizacao_solicitada
@@ -233,12 +160,8 @@ def upload():
     if "arquivo" not in request.files:
 
         return jsonify({
-
             "sucesso": False,
-
-            "erro":
-                "Arquivo não enviado."
-
+            "erro": "Arquivo não enviado."
         }), 400
 
     arquivo = request.files["arquivo"]
@@ -246,32 +169,19 @@ def upload():
     if not arquivo.filename:
 
         return jsonify({
-
             "sucesso": False,
-
-            "erro":
-                "Arquivo inválido."
-
+            "erro": "Arquivo inválido."
         }), 400
-
-    # ======================================================
-    # CRIA NOME ÚNICO
-    # ======================================================
 
     agora = datetime.now()
 
     nome = (
         "config_te_"
-        + agora.strftime(
-            "%Y-%m-%d_%H-%M-%S"
-        )
+        + agora.strftime("%Y-%m-%d_%H-%M-%S")
         + ".txt"
     )
 
-    caminho = (
-        PASTA_ARQUIVOS /
-        nome
-    )
+    caminho = PASTA_ARQUIVOS / nome
 
     contador = 1
 
@@ -279,26 +189,16 @@ def upload():
 
         nome = (
             "config_te_"
-            + agora.strftime(
-                "%Y-%m-%d_%H-%M-%S"
-            )
+            + agora.strftime("%Y-%m-%d_%H-%M-%S")
             + f"_{contador}.txt"
         )
 
-        caminho = (
-            PASTA_ARQUIVOS /
-            nome
-        )
+        caminho = PASTA_ARQUIVOS / nome
 
         contador += 1
 
-    # ======================================================
-    # SALVA
-    # ======================================================
-
     arquivo.save(caminho)
 
-    # Pedido foi atendido
     atualizacao_solicitada = False
 
     print(
@@ -306,21 +206,10 @@ def upload():
     )
 
     return jsonify({
-
         "sucesso": True,
-
         "arquivo": nome,
-
-        "data":
-            agora.strftime(
-                "%d/%m/%Y"
-            ),
-
-        "hora":
-            agora.strftime(
-                "%H:%M:%S"
-            )
-
+        "data": agora.strftime("%d/%m/%Y"),
+        "hora": agora.strftime("%H:%M:%S")
     })
 
 
@@ -328,315 +217,91 @@ def upload():
 # DOWNLOAD
 # ==========================================================
 
-@app.route(
-    "/baixar/<nome>"
-)
+@app.route("/baixar/<nome>")
 def baixar(nome):
 
-    # Impede caminhos externos
     nome = os.path.basename(nome)
 
-    caminho = (
-        PASTA_ARQUIVOS /
-        nome
-    )
+    caminho = PASTA_ARQUIVOS / nome
 
     if not caminho.exists():
 
         return jsonify({
-
-            "erro":
-                "Arquivo não encontrado."
-
+            "erro": "Arquivo não encontrado."
         }), 404
 
     return send_file(
-
         caminho,
-
         as_attachment=True,
-
         download_name=ARQUIVO
-
     )
 
 
 # ==========================================================
-# COMPUTADOR SECUNDÁRIO
+# EXCLUIR SOMENTE A CÓPIA DO SERVIDOR
 # ==========================================================
 
-def verificar_servidor():
+@app.route("/excluir/<nome>", methods=["DELETE"])
+def excluir(nome):
 
-    if not SERVER_URL:
+    nome = os.path.basename(nome)
 
-        print()
-        print(
-            "ERRO: SERVER_URL não configurado."
-        )
-        print()
+    caminho = PASTA_ARQUIVOS / nome
 
-        return
+    if not caminho.exists():
 
-    print()
-    print("==============================")
-    print("    SITEKEY - COMPUTADOR")
-    print("==============================")
-    print()
-
-    print(
-        "Servidor:",
-        SERVER_URL
-    )
-
-    print(
-        "Arquivo:",
-        ARQUIVO
-    )
-
-    print(
-        "Envio automático:",
-        "6 horas após criação/alteração"
-    )
-
-    print()
-
-    caminho_arquivo = Path(ARQUIVO)
-
-    # ======================================================
-    # CONTROLE LOCAL DO ÚLTIMO ENVIO
-    # ======================================================
-
-    arquivo_controle = Path(
-        ".sitekey_ultimo_envio"
-    )
-
-    ultimo_envio = None
-
-    if arquivo_controle.exists():
-
-        try:
-
-            texto = arquivo_controle.read_text().strip()
-
-            if texto:
-
-                ultimo_envio = float(texto)
-
-        except Exception:
-
-            ultimo_envio = None
-
-    print(
-        "Aguardando pedidos..."
-    )
-
-    print()
-
-    # ======================================================
-    # LOOP PRINCIPAL
-    # ======================================================
-
-    while True:
-
-        try:
-
-            # ------------------------------------------------
-            # VERIFICA SE O ARQUIVO EXISTE
-            # ------------------------------------------------
-
-            if not caminho_arquivo.exists():
-
-                time.sleep(INTERVALO)
-
-                continue
-
-            # ------------------------------------------------
-            # INFORMAÇÕES DO ARQUIVO
-            # ------------------------------------------------
-
-            dados_arquivo = caminho_arquivo.stat()
-
-            momento_criacao_ou_alteracao = (
-                dados_arquivo.st_mtime
-            )
-
-            tamanho = dados_arquivo.st_size
-
-            # Criamos uma identificação da versão
-            # usando data de alteração + tamanho.
-
-            versao_atual = (
-                momento_criacao_ou_alteracao,
-                tamanho
-            )
-
-            # ------------------------------------------------
-            # VERIFICA PEDIDO DO SITE
-            # ------------------------------------------------
-
-            resposta = requests.get(
-
-                SERVER_URL + "/verificar",
-
-                timeout=10
-
-            )
-
-            if resposta.status_code == 200:
-
-                dados = resposta.json()
-
-                if dados.get("atualizar"):
-
-                    print()
-                    print(
-                        "Pedido de atualização recebido."
-                    )
-
-                    print(
-                        "Enviando última versão..."
-                    )
-
-                    sucesso = enviar_arquivo(
-                        caminho_arquivo
-                    )
-
-                    if sucesso:
-
-                        # Guarda que essa versão
-                        # já foi enviada.
-
-                        ultimo_envio = (
-                            momento_criacao_ou_alteracao
-                        )
-
-                        arquivo_controle.write_text(
-                            str(ultimo_envio)
-                        )
-
-                        print(
-                            "Arquivo enviado automaticamente!"
-                        )
-
-            # ------------------------------------------------
-            # ENVIO AUTOMÁTICO APÓS 6 HORAS
-            # ------------------------------------------------
-
-            agora = time.time()
-
-            idade = (
-                agora -
-                momento_criacao_ou_alteracao
-            )
-
-            seis_horas_passaram = (
-                idade >= SEIS_HORAS
-            )
-
-            # Verifica se essa versão já foi enviada.
-            versao_ja_enviada = (
-
-                ultimo_envio is not None
-
-                and
-                ultimo_envio ==
-                momento_criacao_ou_alteracao
-
-            )
-
-            if (
-                seis_horas_passaram
-                and
-                not versao_ja_enviada
-            ):
-
-                print()
-                print(
-                    "6 horas se passaram."
-                )
-
-                print(
-                    "Enviando config_te.txt automaticamente..."
-                )
-
-                sucesso = enviar_arquivo(
-                    caminho_arquivo
-                )
-
-                if sucesso:
-
-                    ultimo_envio = (
-                        momento_criacao_ou_alteracao
-                    )
-
-                    arquivo_controle.write_text(
-                        str(ultimo_envio)
-                    )
-
-                    print(
-                        "Envio automático concluído!"
-                    )
-
-            # ------------------------------------------------
-            # PEQUENA PAUSA
-            # ------------------------------------------------
-
-            time.sleep(INTERVALO)
-
-        except requests.exceptions.RequestException:
-
-            print(
-                "Servidor indisponível..."
-            )
-
-            time.sleep(INTERVALO)
-
-        except Exception as erro:
-
-            print(
-                "Erro:",
-                erro
-            )
-
-            time.sleep(INTERVALO)
-
-
-# ==========================================================
-# ENVIAR ARQUIVO PARA O RENDER
-# ==========================================================
-
-def enviar_arquivo(caminho_arquivo):
+        return jsonify({
+            "sucesso": False,
+            "erro": "Arquivo não encontrado."
+        }), 404
 
     try:
 
-        with open(
-            caminho_arquivo,
-            "rb"
-        ) as arquivo:
+        caminho.unlink()
+
+        return jsonify({
+            "sucesso": True,
+            "mensagem": "Arquivo excluído do servidor."
+        })
+
+    except Exception as erro:
+
+        return jsonify({
+            "sucesso": False,
+            "erro": str(erro)
+        }), 500
+
+
+# ==========================================================
+# ENVIAR ARQUIVO
+# ==========================================================
+
+def enviar_arquivo(caminho):
+
+    try:
+
+        with open(caminho, "rb") as arquivo:
 
             resposta = requests.post(
 
                 SERVER_URL + "/upload",
 
                 files={
-
                     "arquivo": (
-
                         ARQUIVO,
-
                         arquivo,
-
                         "text/plain"
-
                     )
-
                 },
 
                 timeout=30
-
             )
 
         if resposta.status_code == 200:
+
+            print(
+                "config_te.txt enviado com sucesso."
+            )
 
             return True
 
@@ -661,22 +326,204 @@ def enviar_arquivo(caminho_arquivo):
 
 
 # ==========================================================
-# INICIAR
+# COMPUTADOR QUE POSSUI CONFIG_TE.TXT
+# ==========================================================
+
+def executar_computador():
+
+    if not SERVER_URL:
+
+        print(
+            "ERRO: SERVER_URL não configurado."
+        )
+
+        return
+
+    caminho = Path(ARQUIVO)
+
+    print()
+    print("==============================")
+    print("       SITEKEY - PC")
+    print("==============================")
+    print()
+
+    print(
+        "Servidor:",
+        SERVER_URL
+    )
+
+    print(
+        "Arquivo:",
+        caminho.absolute()
+    )
+
+    print(
+        "Envio automático: 6 horas"
+    )
+
+    print()
+
+    # ------------------------------------------------------
+    # Guarda a última versão enviada automaticamente.
+    # ------------------------------------------------------
+
+    arquivo_controle = Path(
+        ".sitekey_controle"
+    )
+
+    ultima_versao_enviada = ""
+
+    if arquivo_controle.exists():
+
+        try:
+
+            ultima_versao_enviada = (
+                arquivo_controle.read_text().strip()
+            )
+
+        except Exception:
+            ultima_versao_enviada = ""
+
+    # ------------------------------------------------------
+    # Guarda quando o arquivo foi detectado.
+    # ------------------------------------------------------
+
+    inicio_contagem = None
+
+    versao_detectada = None
+
+    while True:
+
+        try:
+
+            if not caminho.exists():
+
+                print(
+                    "config_te.txt ainda não existe."
+                )
+
+                time.sleep(INTERVALO)
+
+                continue
+
+            dados = caminho.stat()
+
+            modificacao = dados.st_mtime
+
+            tamanho = dados.st_size
+
+            # Identificação da versão atual
+            versao = f"{modificacao}_{tamanho}"
+
+            # --------------------------------------------------
+            # Detectou criação ou alteração
+            # --------------------------------------------------
+
+            if versao != versao_detectada:
+
+                versao_detectada = versao
+
+                inicio_contagem = time.time()
+
+                print()
+                print(
+                    "Nova versão do config_te.txt detectada."
+                )
+
+                print(
+                    "Contagem de 6 horas iniciada."
+                )
+
+            # --------------------------------------------------
+            # PEDIDO MANUAL PELO SITE
+            # --------------------------------------------------
+
+            try:
+
+                resposta = requests.get(
+                    SERVER_URL + "/verificar",
+                    timeout=10
+                )
+
+                if resposta.status_code == 200:
+
+                    dados_pedido = resposta.json()
+
+                    if dados_pedido.get("atualizar"):
+
+                        print()
+                        print(
+                            "Pedido manual recebido."
+                        )
+
+                        # Envia imediatamente a versão atual
+                        if enviar_arquivo(caminho):
+
+                            # O servidor automaticamente
+                            # limpa o pedido depois do upload.
+
+                            pass
+
+            except requests.exceptions.RequestException:
+
+                pass
+
+            # --------------------------------------------------
+            # 6 HORAS
+            # --------------------------------------------------
+
+            if (
+                inicio_contagem is not None
+                and
+                time.time() - inicio_contagem >= SEIS_HORAS
+                and
+                versao != ultima_versao_enviada
+            ):
+
+                print()
+                print(
+                    "6 horas concluídas."
+                )
+
+                print(
+                    "Enviando automaticamente..."
+                )
+
+                if enviar_arquivo(caminho):
+
+                    ultima_versao_enviada = versao
+
+                    arquivo_controle.write_text(
+                        ultima_versao_enviada
+                    )
+
+                    print(
+                        "Envio automático concluído."
+                    )
+
+                    inicio_contagem = None
+
+            time.sleep(INTERVALO)
+
+        except Exception as erro:
+
+            print(
+                "Erro:",
+                erro
+            )
+
+            time.sleep(INTERVALO)
+
+
+# ==========================================================
+# INICIALIZAÇÃO
 # ==========================================================
 
 if __name__ == "__main__":
 
-    # ======================================================
-    # COMPUTADOR SECUNDÁRIO
-    # ======================================================
-
     if MODO == "secundario":
 
-        verificar_servidor()
-
-    # ======================================================
-    # RENDER
-    # ======================================================
+        executar_computador()
 
     else:
 
@@ -684,12 +531,6 @@ if __name__ == "__main__":
         print("==============================")
         print("          SITEKEY")
         print("==============================")
-        print()
-
-        print(
-            "Servidor iniciado."
-        )
-
         print()
 
         porta = int(
@@ -700,11 +541,7 @@ if __name__ == "__main__":
         )
 
         app.run(
-
             host="0.0.0.0",
-
             port=porta,
-
             debug=False
-
         )
