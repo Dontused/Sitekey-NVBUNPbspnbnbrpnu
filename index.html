@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Sitekey</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: Arial, Helvetica, sans-serif;
+        }
+
+        body {
+            background: #f2f2f2;
+            min-height: 100vh;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 900px;
+            margin: auto;
+            padding: 30px 20px;
+        }
+
+        h1 {
+            text-align: center;
+            margin-bottom: 8px;
+        }
+
+        .subtitulo {
+            text-align: center;
+            color: #666;
+            margin-bottom: 30px;
+        }
+
+        .painel {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 3px 15px rgba(0,0,0,0.08);
+        }
+
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 20px;
+            font-weight: bold;
+        }
+
+        .bolinha {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #888;
+        }
+
+        .online {
+            background: #20b455;
+        }
+
+        .offline {
+            background: #d33;
+        }
+
+        .botoes {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 25px;
+            flex-wrap: wrap;
+        }
+
+        button {
+            border: none;
+            border-radius: 8px;
+            padding: 12px 18px;
+            cursor: pointer;
+            font-size: 15px;
+            font-weight: bold;
+        }
+
+        .atualizar {
+            background: #1769e0;
+            color: white;
+        }
+
+        .atualizar:hover {
+            background: #0f55bb;
+        }
+
+        .arquivo {
+            border: 1px solid #ddd;
+            border-radius: 10px;
+            padding: 16px;
+            margin-bottom: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .informacoes {
+            flex: 1;
+        }
+
+        .nome {
+            font-weight: bold;
+            margin-bottom: 6px;
+        }
+
+        .data {
+            color: #777;
+            font-size: 14px;
+        }
+
+        .acoes {
+            display: flex;
+            gap: 8px;
+        }
+
+        .baixar {
+            background: #20a464;
+            color: white;
+        }
+
+        .excluir {
+            background: #d93636;
+            color: white;
+        }
+
+        .mensagem {
+            text-align: center;
+            color: #777;
+            padding: 20px;
+        }
+
+        @media (max-width: 600px) {
+            .arquivo {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .acoes {
+                width: 100%;
+            }
+
+            .acoes button {
+                flex: 1;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+<div class="container">
+
+    <h1>Sitekey</h1>
+
+    <p class="subtitulo">
+        Gerenciamento de arquivos
+    </p>
+
+    <div class="painel">
+
+        <div class="status">
+            <div id="bolinha" class="bolinha"></div>
+            <span id="statusTexto">Verificando servidor...</span>
+        </div>
+
+        <div class="botoes">
+            <button class="atualizar" onclick="solicitarAtualizacao()">
+                🔄 Atualizar arquivo
+            </button>
+        </div>
+
+        <div id="lista">
+            <div class="mensagem">
+                Carregando arquivos...
+            </div>
+        </div>
+
+    </div>
+
+</div>
+
+<script>
+
+    /*
+       COLOQUE AQUI A URL DO SEU RENDER.
+
+       Exemplo:
+       https://sitekey-xxxx.onrender.com
+
+       NÃO coloque / no final.
+    */
+
+    const SERVIDOR = "https://SEU-APP.onrender.com";
+
+
+    // =========================================================
+    // VERIFICAR SERVIDOR
+    // =========================================================
+
+    async function verificarServidor() {
+
+        try {
+
+            const resposta = await fetch(SERVIDOR + "/status");
+
+            if (!resposta.ok) {
+                throw new Error("Servidor offline");
+            }
+
+            const dados = await resposta.json();
+
+            document.getElementById("bolinha").className =
+                "bolinha online";
+
+            document.getElementById("statusTexto").textContent =
+                "Servidor online";
+
+        } catch (erro) {
+
+            document.getElementById("bolinha").className =
+                "bolinha offline";
+
+            document.getElementById("statusTexto").textContent =
+                "Servidor offline";
+        }
+    }
+
+
+    // =========================================================
+    // LISTAR ARQUIVOS
+    // =========================================================
+
+    async function carregarArquivos() {
+
+        const lista = document.getElementById("lista");
+
+        try {
+
+            const resposta =
+                await fetch(SERVIDOR + "/arquivos");
+
+            if (!resposta.ok) {
+                throw new Error("Erro");
+            }
+
+            const dados = await resposta.json();
+
+            lista.innerHTML = "";
+
+            if (!dados.arquivos || dados.arquivos.length === 0) {
+
+                lista.innerHTML = `
+                    <div class="mensagem">
+                        Nenhum arquivo recebido ainda.
+                    </div>
+                `;
+
+                return;
+            }
+
+
+            dados.arquivos.forEach(arquivo => {
+
+                const div = document.createElement("div");
+
+                div.className = "arquivo";
+
+                div.innerHTML = `
+
+                    <div class="informacoes">
+
+                        <div class="nome">
+                            📄 ${arquivo.nome}
+                        </div>
+
+                        <div class="data">
+                            Enviado em ${arquivo.data}
+                            às ${arquivo.hora}
+                        </div>
+
+                    </div>
+
+                    <div class="acoes">
+
+                        <button
+                            class="baixar"
+                            onclick="baixarArquivo('${encodeURIComponent(arquivo.id)}')">
+                            Baixar
+                        </button>
+
+                        <button
+                            class="excluir"
+                            onclick="excluirArquivo('${encodeURIComponent(arquivo.id)}')">
+                            Excluir
+                        </button>
+
+                    </div>
+                `;
+
+                lista.appendChild(div);
+
+            });
+
+        } catch (erro) {
+
+            lista.innerHTML = `
+                <div class="mensagem">
+                    Não foi possível carregar os arquivos.
+                </div>
+            `;
+        }
+    }
+
+
+    // =========================================================
+    // SOLICITAR ATUALIZAÇÃO
+    // =========================================================
+
+    async function solicitarAtualizacao() {
+
+        try {
+
+            const resposta =
+                await fetch(SERVIDOR + "/atualizar", {
+                    method: "POST"
+                });
+
+            const dados = await resposta.json();
+
+            if (dados.sucesso) {
+
+                alert(
+                    "Atualização solicitada!\n\n" +
+                    "O computador secundário enviará o config_te.txt."
+                );
+
+            } else {
+
+                alert("Não foi possível solicitar a atualização.");
+            }
+
+        } catch (erro) {
+
+            alert(
+                "Não foi possível conectar ao servidor."
+            );
+        }
+    }
+
+
+    // =========================================================
+    // BAIXAR
+    // =========================================================
+
+    function baixarArquivo(nome) {
+
+        window.location.href =
+            SERVIDOR + "/baixar/" + nome;
+    }
+
+
+    // =========================================================
+    // EXCLUIR
+    // =========================================================
+
+    async function excluirArquivo(nome) {
+
+        const confirmar = confirm(
+            "Deseja realmente excluir este arquivo?"
+        );
+
+        if (!confirmar) {
+            return;
+        }
+
+        try {
+
+            const resposta =
+                await fetch(
+                    SERVIDOR + "/excluir/" + nome,
+                    {
+                        method: "DELETE"
+                    }
+                );
+
+            const dados = await resposta.json();
+
+            if (dados.sucesso) {
+
+                carregarArquivos();
+
+            } else {
+
+                alert(
+                    dados.erro || "Não foi possível excluir."
+                );
+            }
+
+        } catch (erro) {
+
+            alert(
+                "Não foi possível conectar ao servidor."
+            );
+        }
+    }
+
+
+    // =========================================================
+    // INICIALIZAÇÃO
+    // =========================================================
+
+    verificarServidor();
+    carregarArquivos();
+
+    // Atualiza a lista automaticamente a cada 5 segundos
+    setInterval(() => {
+
+        verificarServidor();
+        carregarArquivos();
+
+    }, 5000);
+
+</script>
+
+</body>
+</html>
