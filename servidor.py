@@ -4,7 +4,7 @@ import time
 import os
 import threading
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 app = Flask(__name__)
 
@@ -24,8 +24,12 @@ SERVER_URL = os.environ.get(
     ""
 ).rstrip("/")
 
-# 6 horas
-SEIS_HORAS = 6 * 60 * 60
+# ==========================================================
+# TEMPO
+# ==========================================================
+
+# 24 horas
+VINTE_QUATRO_HORAS = 24 * 60 * 60
 
 # Intervalo das verificações
 INTERVALO = 5
@@ -34,14 +38,35 @@ INTERVALO = 5
 # dentro deste período
 TIMEOUT_ONLINE = 20
 
-# Estado do PC secundário
+# GMT-3 / Horário de Brasília
+FUSO_BRASIL = timezone(timedelta(hours=-3))
+
+# ==========================================================
+# LIMITE DE ARQUIVOS
+# ==========================================================
+
+MAXIMO_ARQUIVOS = 25
+
+# ==========================================================
+# ESTADO DO PC
+# ==========================================================
+
 ultimo_heartbeat = 0
 
 # Pedido de atualização manual
 atualizacao_solicitada = False
 
-# Controle para evitar vários uploads
+# Controle do último upload manual
 ultimo_upload_manual = 0
+
+
+# ==========================================================
+# DATA/HORA DO BRASIL
+# ==========================================================
+
+def agora_brasil():
+
+    return datetime.now(FUSO_BRASIL)
 
 
 # ==========================================================
@@ -72,9 +97,13 @@ def adicionar_cors(resposta):
 def index():
 
     return jsonify({
+
         "servidor": "Sitekey",
+
         "status": "online",
+
         "modo": MODO
+
     })
 
 
@@ -100,9 +129,18 @@ def pc_status():
             tempo_desde_heartbeat <= TIMEOUT_ONLINE
         )
 
-        ultimo_contato = datetime.fromtimestamp(
-            ultimo_heartbeat
-        ).strftime("%d/%m/%Y %H:%M:%S")
+        data_heartbeat = (
+            datetime.fromtimestamp(
+                ultimo_heartbeat,
+                timezone.utc
+            ).astimezone(FUSO_BRASIL)
+        )
+
+        ultimo_contato = (
+            data_heartbeat.strftime(
+                "%d/%m/%Y %H:%M:%S"
+            )
+        )
 
     return jsonify({
 
@@ -132,7 +170,8 @@ def heartbeat():
 
         "online": True,
 
-        "mensagem": "PC secundário conectado."
+        "mensagem":
+            "PC secundário conectado."
 
     })
 
@@ -149,8 +188,11 @@ def listar_arquivos():
     if not PASTA_ARQUIVOS.exists():
 
         return jsonify({
+
             "sucesso": True,
+
             "arquivos": []
+
         })
 
     for arquivo in PASTA_ARQUIVOS.iterdir():
@@ -162,8 +204,11 @@ def listar_arquivos():
 
             dados = arquivo.stat()
 
-            data = datetime.fromtimestamp(
-                dados.st_mtime
+            data = (
+                datetime.fromtimestamp(
+                    dados.st_mtime,
+                    timezone.utc
+                ).astimezone(FUSO_BRASIL)
             )
 
             arquivos.append({
@@ -213,9 +258,12 @@ def atualizar():
 
     atualizacao_solicitada = True
 
-    print(
-        "Pedido de atualização recebido."
-    )
+    print()
+    print("======================================")
+    print("Pedido de atualização recebido.")
+    print("Aguardando PC secundário...")
+    print("======================================")
+    print()
 
     return jsonify({
 
@@ -276,7 +324,7 @@ def upload():
 
         }), 400
 
-    agora = datetime.now()
+    agora = agora_brasil()
 
     nome = (
         "config_te_"
@@ -304,17 +352,66 @@ def upload():
 
         contador += 1
 
+    # ======================================================
+    # SALVAR ARQUIVO
+    # ======================================================
+
     arquivo.save(caminho)
-
-    # Limpa o pedido manual
-    atualizacao_solicitada = False
-
-    ultimo_upload_manual = time.time()
 
     print()
     print(
         f"Arquivo recebido: {nome}"
     )
+
+    # ======================================================
+    # MANTER NO MÁXIMO 25 ARQUIVOS
+    # ======================================================
+
+    arquivos = [
+
+        item
+
+        for item in PASTA_ARQUIVOS.iterdir()
+
+        if item.is_file()
+
+    ]
+
+    arquivos.sort(
+        key=lambda item: item.stat().st_mtime
+    )
+
+    while len(arquivos) > MAXIMO_ARQUIVOS:
+
+        arquivo_antigo = arquivos.pop(0)
+
+        try:
+
+            arquivo_antigo.unlink()
+
+            print(
+                f"Arquivo antigo excluído: "
+                f"{arquivo_antigo.name}"
+            )
+
+        except Exception as erro:
+
+            print(
+                "Erro ao excluir arquivo antigo:"
+            )
+
+            print(
+                erro
+            )
+
+    # ======================================================
+    # LIMPAR PEDIDO MANUAL
+    # ======================================================
+
+    atualizacao_solicitada = False
+
+    ultimo_upload_manual = time.time()
+
     print()
 
     return jsonify({
@@ -564,7 +661,16 @@ def executar_computador():
     )
 
     print(
-        "Envio automático: 6 horas"
+        "Envio automático: 24 horas"
+    )
+
+    print(
+        "Horário: GMT-3 / Brasil"
+    )
+
+    print(
+        "Máximo de arquivos no servidor:",
+        MAXIMO_ARQUIVOS
     )
 
     print()
@@ -631,88 +737,117 @@ def executar_computador():
 
             tamanho = dados.st_size
 
-            # Identifica a versão
+            # Identifica a versão do arquivo
             versao = (
                 f"{modificacao}_{tamanho}"
             )
 
             # ==================================================
-            # VERIFICA SE É UM ARQUIVO NOVO OU ALTERADO
+            # VERIFICA PEDIDO MANUAL SEMPRE
             # ==================================================
 
-            if versao != ultima_versao_enviada:
+            try:
 
-                # Tempo real desde a última modificação
-                tempo_desde_modificacao = (
-                    time.time() - modificacao
+                resposta = requests.get(
+
+                    SERVER_URL + "/verificar",
+
+                    timeout=10
+
                 )
 
-                # ==================================================
-                # PEDIDO MANUAL
-                # ==================================================
+                if resposta.status_code == 200:
 
-                try:
-
-                    resposta = requests.get(
-
-                        SERVER_URL
-                        + "/verificar",
-
-                        timeout=10
-
+                    dados_pedido = (
+                        resposta.json()
                     )
 
-                    if resposta.status_code == 200:
+                    if dados_pedido.get(
+                        "atualizar"
+                    ):
 
-                        dados_pedido = (
-                            resposta.json()
+                        print()
+                        print(
+                            "================================"
+                        )
+                        print(
+                            "Pedido manual recebido."
+                        )
+                        print(
+                            "Enviando config_te.txt..."
+                        )
+                        print(
+                            "================================"
                         )
 
-                        if dados_pedido.get(
-                            "atualizar"
-                        ):
+                        sucesso = (
+                            enviar_arquivo(
+                                caminho
+                            )
+                        )
 
-                            print()
-                            print(
-                                "Pedido manual recebido."
+                        if sucesso:
+
+                            ultima_versao_enviada = (
+                                versao
                             )
 
-                            sucesso = (
-                                enviar_arquivo(
-                                    caminho
-                                )
-                            )
-
-                            if sucesso:
-
-                                ultima_versao_enviada = (
-                                    versao
-                                )
+                            try:
 
                                 arquivo_controle.write_text(
                                     ultima_versao_enviada
                                 )
 
-                            time.sleep(2)
+                            except Exception as erro:
 
-                            continue
+                                print(
+                                    "Erro ao salvar controle:"
+                                )
 
-                except requests.exceptions.RequestException:
+                                print(
+                                    erro
+                                )
 
-                    pass
+                            print(
+                                "Atualização manual concluída."
+                            )
+
+                        else:
+
+                            print(
+                                "Falha no envio manual."
+                            )
+
+                        time.sleep(2)
+
+                        continue
+
+            except requests.exceptions.RequestException:
+
+                pass
+
+            # ==================================================
+            # VERIFICA ARQUIVO NOVO OU ALTERADO
+            # ==================================================
+
+            if versao != ultima_versao_enviada:
+
+                tempo_desde_modificacao = (
+                    time.time() - modificacao
+                )
 
                 # ==================================================
-                # ENVIO AUTOMÁTICO APÓS 6 HORAS
+                # ENVIO AUTOMÁTICO APÓS 24 HORAS
                 # ==================================================
 
                 if (
                     tempo_desde_modificacao
-                    >= SEIS_HORAS
+                    >= VINTE_QUATRO_HORAS
                 ):
 
                     print()
                     print(
-                        "6 horas desde a última alteração."
+                        "24 horas desde a última alteração."
                     )
 
                     print(
@@ -731,9 +866,21 @@ def executar_computador():
                             versao
                         )
 
-                        arquivo_controle.write_text(
-                            ultima_versao_enviada
-                        )
+                        try:
+
+                            arquivo_controle.write_text(
+                                ultima_versao_enviada
+                            )
+
+                        except Exception as erro:
+
+                            print(
+                                "Erro ao salvar controle:"
+                            )
+
+                            print(
+                                erro
+                            )
 
                         print(
                             "Envio automático concluído."
@@ -742,13 +889,14 @@ def executar_computador():
                     else:
 
                         print(
-                            "Upload falhou."
+                            "Upload automático falhou."
                         )
 
             time.sleep(INTERVALO)
 
         except Exception as erro:
 
+            print()
             print(
                 "Erro no computador:"
             )
