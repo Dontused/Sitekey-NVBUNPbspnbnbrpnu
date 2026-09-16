@@ -169,7 +169,7 @@
 
         <div class="status">
             <div id="bolinha" class="bolinha"></div>
-            <span id="statusTexto">Verificando servidor...</span>
+            <span id="statusTexto">Verificando PC secundário...</span>
         </div>
 
         <div class="botoes">
@@ -191,38 +191,53 @@
 <script>
 
     /*
-       COLOQUE AQUI A URL DO SEU RENDER.
-
-       Exemplo:
-       https://sitekey-xxxx.onrender.com
-
-       NÃO coloque / no final.
+       URL DO SEU RENDER
     */
 
     const SERVIDOR = "https://sitekey-nvbunpbspnbnbrpnu.onrender.com";
 
 
     // =========================================================
-    // VERIFICAR SERVIDOR
+    // VERIFICAR PC SECUNDÁRIO
     // =========================================================
 
     async function verificarServidor() {
 
         try {
 
-            const resposta = await fetch(SERVIDOR + "/status");
+            const resposta =
+                await fetch(SERVIDOR + "/pc_status");
 
             if (!resposta.ok) {
-                throw new Error("Servidor offline");
+                throw new Error("Erro ao verificar PC");
             }
 
             const dados = await resposta.json();
 
-            document.getElementById("bolinha").className =
-                "bolinha online";
+            const bolinha =
+                document.getElementById("bolinha");
 
-            document.getElementById("statusTexto").textContent =
-                "Servidor online";
+            const statusTexto =
+                document.getElementById("statusTexto");
+
+
+            if (dados.online) {
+
+                bolinha.className =
+                    "bolinha online";
+
+                statusTexto.textContent =
+                    "🟢 PC secundário: ONLINE";
+
+            } else {
+
+                bolinha.className =
+                    "bolinha offline";
+
+                statusTexto.textContent =
+                    "🔴 PC secundário: OFFLINE";
+
+            }
 
         } catch (erro) {
 
@@ -230,7 +245,8 @@
                 "bolinha offline";
 
             document.getElementById("statusTexto").textContent =
-                "Servidor offline";
+                "🔴 PC secundário: OFFLINE";
+
         }
     }
 
@@ -421,7 +437,7 @@
     verificarServidor();
     carregarArquivos();
 
-    // Atualiza a lista automaticamente a cada 5 segundos
+    // Atualiza status e lista a cada 5 segundos
     setInterval(() => {
 
         verificarServidor();
