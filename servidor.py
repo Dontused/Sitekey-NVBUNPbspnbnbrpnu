@@ -24,6 +24,7 @@ SERVER_URL = os.environ.get(
     ""
 ).rstrip("/")
 
+
 # ==========================================================
 # TEMPO
 # ==========================================================
@@ -38,14 +39,16 @@ INTERVALO = 5
 # dentro deste período
 TIMEOUT_ONLINE = 20
 
-# GMT-3 / Horário de Brasília
+# Horário de Brasília / GMT-3
 FUSO_BRASIL = timezone(timedelta(hours=-3))
+
 
 # ==========================================================
 # LIMITE DE ARQUIVOS
 # ==========================================================
 
 MAXIMO_ARQUIVOS = 25
+
 
 # ==========================================================
 # ESTADO DO PC
@@ -324,7 +327,15 @@ def upload():
 
         }), 400
 
+    # ======================================================
+    # DATA/HORA DO BRASIL
+    # ======================================================
+
     agora = agora_brasil()
+
+    # ======================================================
+    # CRIA NOME DO ARQUIVO
+    # ======================================================
 
     nome = (
         "config_te_"
@@ -356,7 +367,27 @@ def upload():
     # SALVAR ARQUIVO
     # ======================================================
 
-    arquivo.save(caminho)
+    try:
+
+        arquivo.save(caminho)
+
+    except Exception as erro:
+
+        print()
+        print(
+            "Erro ao salvar arquivo:"
+        )
+        print(
+            erro
+        )
+
+        return jsonify({
+
+            "sucesso": False,
+
+            "erro": str(erro)
+
+        }), 500
 
     print()
     print(
@@ -390,8 +421,11 @@ def upload():
             arquivo_antigo.unlink()
 
             print(
-                f"Arquivo antigo excluído: "
-                f"{arquivo_antigo.name}"
+                "Arquivo antigo excluído:"
+            )
+
+            print(
+                arquivo_antigo.name
             )
 
         except Exception as erro:
@@ -411,6 +445,10 @@ def upload():
     atualizacao_solicitada = False
 
     ultimo_upload_manual = time.time()
+
+    print(
+        "Upload concluído com sucesso."
+    )
 
     print()
 
@@ -556,13 +594,44 @@ def enviar_arquivo(caminho):
 
             )
 
+        # ==================================================
+        # UPLOAD BEM-SUCEDIDO
+        # ==================================================
+
         if resposta.status_code == 200:
 
             print(
                 "config_te.txt enviado com sucesso."
             )
 
+            # ==================================================
+            # EXCLUIR ARQUIVO ORIGINAL
+            # SOMENTE APÓS O SERVIDOR CONFIRMAR O UPLOAD
+            # ==================================================
+
+            try:
+
+                caminho.unlink()
+
+                print(
+                    "config_te.txt excluído do PC secundário."
+                )
+
+            except Exception as erro:
+
+                print(
+                    "Erro ao excluir config_te.txt:"
+                )
+
+                print(
+                    erro
+                )
+
             return True
+
+        # ==================================================
+        # ERRO NO UPLOAD
+        # ==================================================
 
         print(
             "Erro no upload:"
@@ -673,6 +742,10 @@ def executar_computador():
         MAXIMO_ARQUIVOS
     )
 
+    print(
+        "Excluir arquivo após envio: SIM"
+    )
+
     print()
 
     # ======================================================
@@ -721,15 +794,19 @@ def executar_computador():
 
         try:
 
-            if not caminho.exists():
+            # ==================================================
+            # VERIFICA SE CONFIG_TE EXISTE
+            # ==================================================
 
-                print(
-                    "config_te.txt ainda não existe."
-                )
+            if not caminho.exists():
 
                 time.sleep(INTERVALO)
 
                 continue
+
+            # ==================================================
+            # INFORMAÇÕES DO ARQUIVO
+            # ==================================================
 
             dados = caminho.stat()
 
@@ -770,12 +847,15 @@ def executar_computador():
                         print(
                             "================================"
                         )
+
                         print(
                             "Pedido manual recebido."
                         )
+
                         print(
                             "Enviando config_te.txt..."
                         )
+
                         print(
                             "================================"
                         )
@@ -788,6 +868,8 @@ def executar_computador():
 
                         if sucesso:
 
+                            # O arquivo foi excluído
+                            # dentro de enviar_arquivo()
                             ultima_versao_enviada = (
                                 versao
                             )
@@ -831,6 +913,10 @@ def executar_computador():
             # ==================================================
 
             if versao != ultima_versao_enviada:
+
+                # ==================================================
+                # TEMPO DESDE A MODIFICAÇÃO
+                # ==================================================
 
                 tempo_desde_modificacao = (
                     time.time() - modificacao
@@ -932,12 +1018,15 @@ if __name__ == "__main__":
         print(
             "=============================="
         )
+
         print(
             "          SITEKEY"
         )
+
         print(
             "=============================="
         )
+
         print()
 
         porta = int(
