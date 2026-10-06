@@ -86,6 +86,49 @@
             gap: 10px;
             font-weight: bold;
             font-size: 17px;
+            flex-wrap: wrap;
+        }
+
+        .nome-pc-edicao {
+            display: none;
+            align-items: center;
+            gap: 7px;
+        }
+
+        .nome-pc-edicao input {
+            width: 190px;
+            max-width: 100%;
+            border: 1px solid #ccc;
+            border-radius: 7px;
+            padding: 8px 10px;
+            font-size: 14px;
+            outline: none;
+        }
+
+        .nome-pc-edicao input:focus {
+            border-color: #1769e0;
+        }
+
+        .editar-nome,
+        .salvar-nome,
+        .cancelar-nome {
+            padding: 7px 10px;
+            font-size: 12px;
+        }
+
+        .editar-nome {
+            background: #eee;
+            color: #333;
+        }
+
+        .salvar-nome {
+            background: #1769e0;
+            color: white;
+        }
+
+        .cancelar-nome {
+            background: #ddd;
+            color: #333;
         }
 
         .status {
@@ -293,6 +336,96 @@
             .replaceAll(">", "&gt;")
             .replaceAll('"', "&quot;")
             .replaceAll("'", "&#039;");
+    }
+
+
+    // =========================================================
+    // NOMES PERSONALIZADOS DOS COMPUTADORES
+    // =========================================================
+
+    const CHAVE_NOMES_PCS = "sitekey_nomes_pcs";
+
+    function obterNomesPCs() {
+        try {
+            return JSON.parse(
+                localStorage.getItem(CHAVE_NOMES_PCS) || "{}"
+            );
+        } catch (erro) {
+            return {};
+        }
+    }
+
+    function obterNomePC(pc) {
+        const nomes = obterNomesPCs();
+
+        // O ID do PC é usado como chave.
+        // Assim, quando o mesmo PC voltar a ficar online,
+        // o nome personalizado continua sendo o mesmo.
+        return nomes[pc.id] || pc.nome || "Computador";
+    }
+
+    function salvarNomePC(pcId, novoNome) {
+        novoNome = String(novoNome || "").trim();
+
+        if (!novoNome) {
+            alert("Digite um nome para o computador.");
+            return;
+        }
+
+        const nomes = obterNomesPCs();
+        nomes[pcId] = novoNome;
+
+        localStorage.setItem(
+            CHAVE_NOMES_PCS,
+            JSON.stringify(nomes)
+        );
+
+        carregarComputadores();
+    }
+
+    function editarNomePC(pcId) {
+        const display =
+            document.getElementById("nome-display-" + pcId);
+
+        const edicao =
+            document.getElementById("nome-edicao-" + pcId);
+
+        if (!display || !edicao) {
+            return;
+        }
+
+        display.style.display = "none";
+        edicao.style.display = "flex";
+
+        const input =
+            document.getElementById("nome-input-" + pcId);
+
+        if (input) {
+            input.focus();
+            input.select();
+        }
+    }
+
+    function cancelarEdicaoNome(pcId) {
+        const display =
+            document.getElementById("nome-display-" + pcId);
+
+        const edicao =
+            document.getElementById("nome-edicao-" + pcId);
+
+        if (display) display.style.display = "flex";
+        if (edicao) edicao.style.display = "none";
+    }
+
+    function confirmarNomePC(pcId) {
+        const input =
+            document.getElementById("nome-input-" + pcId);
+
+        if (!input) {
+            return;
+        }
+
+        salvarNomePC(pcId, input.value);
     }
 
 
@@ -520,8 +653,47 @@
 
                 <div class="pc-nome">
 
-                    💻
-                    ${escaparHTML(pc.nome)}
+                    <span
+                        id="nome-display-${idSeguro}"
+                        style="display:flex; align-items:center; gap:10px;">
+
+                        💻
+                        <span>
+                            ${escaparHTML(obterNomePC(pc))}
+                        </span>
+
+                        <button
+                            class="editar-nome"
+                            onclick="editarNomePC('${idSeguro}')">
+                            ✏️ Editar
+                        </button>
+
+                    </span>
+
+                    <span
+                        id="nome-edicao-${idSeguro}"
+                        class="nome-pc-edicao">
+
+                        <input
+                            id="nome-input-${idSeguro}"
+                            type="text"
+                            maxlength="50"
+                            value="${escaparHTML(obterNomePC(pc))}"
+                            onkeydown="if(event.key === 'Enter') confirmarNomePC('${idSeguro}'); if(event.key === 'Escape') cancelarEdicaoNome('${idSeguro}');">
+
+                        <button
+                            class="salvar-nome"
+                            onclick="confirmarNomePC('${idSeguro}')">
+                            Salvar
+                        </button>
+
+                        <button
+                            class="cancelar-nome"
+                            onclick="cancelarEdicaoNome('${idSeguro}')">
+                            Cancelar
+                        </button>
+
+                    </span>
 
                     ${pedido}
 
@@ -601,14 +773,8 @@
 
             if (dados.sucesso) {
 
-                alert(
-                    "Atualização solicitada!\n\n" +
-                    "Computador: " +
-                    pcNome +
-                    "\n\n" +
-                    "Ele enviará o config_te.txt."
-                );
-
+                // Não exibe mensagem na página.
+                // Apenas atualiza o estado do computador silenciosamente.
                 carregarComputadores();
 
             } else {
