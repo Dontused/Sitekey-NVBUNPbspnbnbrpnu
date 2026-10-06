@@ -33,8 +33,8 @@ SERVER_URL = os.environ.get("SERVER_URL", "").rstrip("/")
 INTERVALO = 5
 TIMEOUT_ONLINE = 20
 FUSO_BRASIL = timezone(timedelta(hours=-3))
-HORA_ENVIO = 12
-MINUTO_ENVIO = 25
+HORA_ENVIO = 13
+MINUTO_ENVIO = 0
 MAXIMO_ARQUIVOS = 25
 
 # =========================================================
@@ -549,6 +549,80 @@ def baixar(pc_id, nome):
         as_attachment=True,
         download_name=NOME_ARQUIVO
     )
+
+
+# =========================================================
+# EXCLUIR COMPUTADOR INTEIRO
+# =========================================================
+
+@app.route("/excluir_pc/<pc_id>", methods=["DELETE"])
+def excluir_pc(pc_id):
+    pc_id = os.path.basename(pc_id).strip()
+
+    if not pc_id:
+        return jsonify({
+            "sucesso": False,
+            "erro": "pc_id não informado."
+        }), 400
+
+    # Remove o cadastro do computador da memória.
+    with lock_pcs:
+        existia = pc_id in pcs
+
+        if existia:
+            del pcs[pc_id]
+
+    # Remove todos os arquivos armazenados desse computador.
+    pasta = PASTA_ARQUIVOS / pc_id
+
+    arquivos_excluidos = 0
+
+    try:
+        if pasta.exists() and pasta.is_dir():
+
+            for item in pasta.iterdir():
+                try:
+                    if item.is_file() or item.is_symlink():
+                        item.unlink()
+                        arquivos_excluidos += 1
+
+                    elif item.is_dir():
+                        import shutil
+                        shutil.rmtree(item)
+                        arquivos_excluidos += 1
+
+                except Exception as erro:
+                    print(
+                        "Erro ao excluir item do PC:",
+                        item,
+                        erro
+                    )
+
+            try:
+                pasta.rmdir()
+            except OSError:
+                pass
+
+    except Exception as erro:
+        print("Erro ao excluir pasta do PC:", erro)
+
+        return jsonify({
+            "sucesso": False,
+            "erro": "O PC foi removido, mas houve erro ao apagar os arquivos."
+        }), 500
+
+    print("======================================")
+    print("COMPUTADOR EXCLUÍDO")
+    print("PC:", pc_id)
+    print("Cadastro existia:", existia)
+    print("Arquivos excluídos:", arquivos_excluidos)
+
+    return jsonify({
+        "sucesso": True,
+        "pc_id": pc_id,
+        "arquivos_excluidos": arquivos_excluidos,
+        "mensagem": "Computador excluído com sucesso."
+    })
 
 
 # =========================================================

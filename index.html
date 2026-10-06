@@ -111,9 +111,19 @@
 
         .editar-nome,
         .salvar-nome,
-        .cancelar-nome {
+        .cancelar-nome,
+        .excluir-pc {
             padding: 7px 10px;
             font-size: 12px;
+        }
+
+        .excluir-pc {
+            background: #d93636;
+            color: white;
+        }
+
+        .excluir-pc:hover {
+            background: #b92323;
         }
 
         .editar-nome {
@@ -708,6 +718,12 @@
                         ${statusTexto}
                     </span>
 
+                    <button
+                        class="excluir-pc"
+                        onclick="excluirPC('${idSeguro}', '${escaparHTML(obterNomePC(pc))}')">
+                        🗑️ Excluir PC
+                    </button>
+
                 </div>
 
             </div>
@@ -785,6 +801,60 @@
                 );
             }
 
+
+        } catch (erro) {
+
+            alert(
+                "Não foi possível conectar ao servidor."
+            );
+        }
+    }
+
+
+    // =========================================================
+    // EXCLUIR COMPUTADOR
+    // =========================================================
+
+    async function excluirPC(pcId, pcNome) {
+
+        const confirmar =
+            confirm(
+                "Deseja realmente excluir este computador?\n\n" +
+                "Computador: " + pcNome + "\n\n" +
+                "Os arquivos armazenados deste PC também serão excluídos."
+            );
+
+        if (!confirmar) {
+            return;
+        }
+
+        try {
+
+            const resposta =
+                await fetch(
+                    SERVIDOR +
+                    "/excluir_pc/" +
+                    pcId,
+                    {
+                        method: "DELETE"
+                    }
+                );
+
+            const dados =
+                await resposta.json();
+
+            if (dados.sucesso) {
+
+                // Atualiza silenciosamente a lista.
+                carregarComputadores();
+
+            } else {
+
+                alert(
+                    dados.erro ||
+                    "Não foi possível excluir o computador."
+                );
+            }
 
         } catch (erro) {
 
