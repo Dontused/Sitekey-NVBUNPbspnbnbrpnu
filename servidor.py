@@ -3,313 +3,221 @@ import requests
 import time
 import os
 import threading
-import sys
-import uuid
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 app = Flask(__name__)
 
-# =========================================================
-# CONFIGURAÇÃO DE CAMINHOS
-# =========================================================
+# ============================================================
+# CAMINHOS DO PROGRAMA
+# ============================================================
+# Tudo será procurado na mesma pasta onde está o servidor.py.
+# Isso evita problemas ao colocar o programa em pendrive ou HD.
 
-if getattr(sys, "frozen", False):
-    PASTA_PROGRAMA = Path(sys.executable).resolve().parent
-else:
-    PASTA_PROGRAMA = Path(__file__).resolve().parent
+PASTA_PROGRAMA = Path(__file__).resolve().parent
 
 NOME_ARQUIVO = "config_te.txt"
+
 CAMINHO_ARQUIVO = PASTA_PROGRAMA / NOME_ARQUIVO
+
 ARQUIVO_CONTROLE = PASTA_PROGRAMA / ".sitekey_controle"
-ARQUIVO_PC_ID = PASTA_PROGRAMA / ".sitekey_pc_id"
 
 PASTA_ARQUIVOS = PASTA_PROGRAMA / "arquivos"
+
 PASTA_ARQUIVOS.mkdir(parents=True, exist_ok=True)
 
+
+# ============================================================
+# CONFIGURAÇÕES
+# ============================================================
+
 MODO = os.environ.get("MODE", "servidor").lower()
-SERVER_URL = os.environ.get("SERVER_URL", "").rstrip("/")
+
+SERVER_URL = os.environ.get(
+    "SERVER_URL",
+    ""
+).rstrip("/")
 
 INTERVALO = 5
+
 TIMEOUT_ONLINE = 20
-FUSO_BRASIL = timezone(timedelta(hours=-3))
+
+FUSO_BRASIL = timezone(
+    timedelta(hours=-3)
+)
+
 HORA_ENVIO = 13
+
 MINUTO_ENVIO = 0
+
 MAXIMO_ARQUIVOS = 25
 
-# =========================================================
-# IDENTIFICAÇÃO DO COMPUTADOR
-# =========================================================
 
-def obter_pc_id():
-    """
-    Cria um ID único para este computador e o mantém salvo.
-    Assim o mesmo notebook continua sendo reconhecido mesmo
-    depois de reiniciar.
-    """
-    try:
-        if ARQUIVO_PC_ID.exists():
-            valor = ARQUIVO_PC_ID.read_text(encoding="utf-8").strip()
-            if valor:
-                return valor
+# ============================================================
+# VARIÁVEIS
+# ============================================================
 
-        nome = os.environ.get("COMPUTERNAME", "PC").strip()
-        mac = uuid.getnode()
+ultimo_heartbeat = 0
 
-        pc_id = f"{nome}-{mac:012X}"
+atualizacao_solicitada = False
 
-        ARQUIVO_PC_ID.write_text(pc_id, encoding="utf-8")
-        return pc_id
-
-    except Exception:
-        return f"PC-{uuid.uuid4().hex[:12]}"
+ultimo_upload_manual = 0
 
 
-PC_ID = obter_pc_id()
-PC_NOME = os.environ.get("COMPUTERNAME", PC_ID)
-
-# =========================================================
-# DADOS DOS PCS CONECTADOS
-# =========================================================
-
-# Estrutura:
-# pcs[pc_id] = {
-#     "nome": "NOTEBOOK-01",
-#     "ultimo_heartbeat": timestamp,
-#     "atualizacao_solicitada": False
-# }
-
-pcs = {}
-lock_pcs = threading.Lock()
-
+# ============================================================
+# HORÁRIO DO BRASIL
+# ============================================================
 
 def agora_brasil():
     return datetime.now(FUSO_BRASIL)
 
 
-def obter_dados_pc(pc_id):
-    with lock_pcs:
-        return pcs.get(pc_id)
-
-
-def garantir_pc(pc_id, nome=None):
-    with lock_pcs:
-        if pc_id not in pcs:
-            pcs[pc_id] = {
-                "nome": nome or pc_id,
-                "ultimo_heartbeat": 0,
-                "atualizacao_solicitada": False
-            }
-
-        if nome:
-            pcs[pc_id]["nome"] = nome
-
-        return pcs[pc_id]
-
-
-def pasta_do_pc(pc_id):
-    # Impede tentativa de usar caminhos fora da pasta "arquivos".
-    pc_id_seguro = os.path.basename(pc_id)
-    pasta = PASTA_ARQUIVOS / pc_id_seguro
-    pasta.mkdir(parents=True, exist_ok=True)
-    return pasta
-
-
-def nome_pc_exibicao(pc_id):
-    dados = obter_dados_pc(pc_id)
-    if dados:
-        return dados.get("nome") or pc_id
-    return pc_id
-
+# ============================================================
+# CORS
+# ============================================================
 
 @app.after_request
 def adicionar_cors(resposta):
+
     resposta.headers["Access-Control-Allow-Origin"] = "*"
+
     resposta.headers["Access-Control-Allow-Methods"] = (
         "GET, POST, DELETE, OPTIONS"
     )
-    resposta.headers["Access-Control-Allow-Headers"] = "Content-Type"
+
+    resposta.headers["Access-Control-Allow-Headers"] = (
+        "Content-Type"
+    )
+
     return resposta
 
 
-# =========================================================
-# INDEX / INFORMAÇÕES DO SERVIDOR
-# =========================================================
+# ============================================================
+# ROTA PRINCIPAL
+# ============================================================
 
 @app.route("/")
 def index():
+
     return jsonify({
         "servidor": "Sitekey",
         "status": "online",
-        "modo": MODO,
-        "pc_id": PC_ID if MODO == "secundario" else None
+        "modo": MODO
     })
 
 
-# =========================================================
-# LISTAR TODOS OS PCS
-# =========================================================
-
-@app.route("/pcs")
-def listar_pcs():
-    agora = time.time()
-    resultado = []
-
-    with lock_pcs:
-        snapshot = dict(pcs)
-
-    for pc_id, dados in snapshot.items():
-        ultimo = dados.get("ultimo_heartbeat", 0)
-        online = bool(ultimo and (agora - ultimo <= TIMEOUT_ONLINE))
-
-        data_heartbeat = None
-
-        if ultimo:
-            data_heartbeat = datetime.fromtimestamp(
-                ultimo,
-                timezone.utc
-            ).astimezone(FUSO_BRASIL).strftime("%d/%m/%Y %H:%M:%S")
-
-        resultado.append({
-            "id": pc_id,
-            "nome": dados.get("nome") or pc_id,
-            "online": online,
-            "ultimo_contato": ultimo,
-            "data_heartbeat": data_heartbeat,
-            "atualizacao_solicitada": bool(
-                dados.get("atualizacao_solicitada")
-            )
-        })
-
-    # Online primeiro, depois por nome.
-    resultado.sort(
-        key=lambda pc: (
-            not pc["online"],
-            pc["nome"].lower()
-        )
-    )
-
-    return jsonify({
-        "sucesso": True,
-        "pcs": resultado
-    })
-
-
-# =========================================================
-# STATUS DE UM PC
-# =========================================================
+# ============================================================
+# STATUS DO PC SECUNDÁRIO
+# ============================================================
 
 @app.route("/pc_status")
 def pc_status():
-    pc_id = request.args.get("pc_id", "").strip()
 
-    if not pc_id:
-        return jsonify({
-            "sucesso": False,
-            "erro": "pc_id não informado."
-        }), 400
+    if ultimo_heartbeat == 0:
 
-    dados = obter_dados_pc(pc_id)
+        online = False
 
-    if not dados:
-        return jsonify({
-            "sucesso": True,
-            "online": False,
-            "id": pc_id,
-            "nome": pc_id,
-            "data_heartbeat": None
-        })
+        ultimo_contato = None
 
-    ultimo = dados.get("ultimo_heartbeat", 0)
-    online = bool(ultimo and (time.time() - ultimo <= TIMEOUT_ONLINE))
+    else:
 
-    data_heartbeat = None
+        tempo_desde_heartbeat = (
+            time.time() - ultimo_heartbeat
+        )
 
-    if ultimo:
-        data_heartbeat = datetime.fromtimestamp(
-            ultimo,
-            timezone.utc
-        ).astimezone(FUSO_BRASIL).strftime("%d/%m/%Y %H:%M:%S")
+        online = (
+            tempo_desde_heartbeat <= TIMEOUT_ONLINE
+        )
+
+        data_heartbeat = (
+            datetime
+            .fromtimestamp(
+                ultimo_heartbeat,
+                timezone.utc
+            )
+            .astimezone(FUSO_BRASIL)
+        )
+
+        ultimo_contato = (
+            data_heartbeat.strftime(
+                "%d/%m/%Y %H:%M:%S"
+            )
+        )
 
     return jsonify({
-        "sucesso": True,
         "online": online,
-        "id": pc_id,
-        "nome": dados.get("nome") or pc_id,
-        "ultimo_contato": ultimo,
-        "data_heartbeat": data_heartbeat
+        "ultimo_contato": ultimo_contato,
+        "modo": "secundario"
     })
 
 
-# =========================================================
+# ============================================================
 # HEARTBEAT
-# =========================================================
+# ============================================================
 
 @app.route("/heartbeat", methods=["POST"])
 def heartbeat():
-    dados = request.get_json(silent=True) or {}
 
-    pc_id = str(dados.get("pc_id", "")).strip()
-    pc_nome = str(dados.get("pc_nome", "")).strip()
+    global ultimo_heartbeat
 
-    if not pc_id:
-        return jsonify({
-            "sucesso": False,
-            "erro": "pc_id não informado."
-        }), 400
-
-    if not pc_nome:
-        pc_nome = pc_id
-
-    pc = garantir_pc(pc_id, pc_nome)
-
-    with lock_pcs:
-        pc["ultimo_heartbeat"] = time.time()
+    ultimo_heartbeat = time.time()
 
     return jsonify({
         "sucesso": True,
         "online": True,
-        "pc_id": pc_id,
-        "pc_nome": pc_nome,
         "mensagem": "PC secundário conectado."
     })
 
 
-# =========================================================
-# LISTAR ARQUIVOS DE UM PC
-# =========================================================
+# ============================================================
+# LISTAR ARQUIVOS
+# ============================================================
 
 @app.route("/arquivos")
 def listar_arquivos():
-    pc_id = request.args.get("pc_id", "").strip()
 
-    if not pc_id:
-        return jsonify({
-            "sucesso": False,
-            "erro": "pc_id não informado."
-        }), 400
-
-    pasta = pasta_do_pc(pc_id)
     arquivos = []
 
-    for arquivo in pasta.iterdir():
-        if arquivo.is_file():
+    if not PASTA_ARQUIVOS.exists():
+
+        return jsonify({
+            "sucesso": True,
+            "arquivos": []
+        })
+
+    for arquivo in PASTA_ARQUIVOS.iterdir():
+
+        if not arquivo.is_file():
+            continue
+
+        try:
+
             dados = arquivo.stat()
 
-            data = datetime.fromtimestamp(
-                dados.st_mtime,
-                timezone.utc
-            ).astimezone(FUSO_BRASIL)
+            data = (
+                datetime
+                .fromtimestamp(
+                    dados.st_mtime,
+                    timezone.utc
+                )
+                .astimezone(FUSO_BRASIL)
+            )
 
             arquivos.append({
                 "id": arquivo.name,
-                "nome": arquivo.name,
-                "pc_id": pc_id,
-                "pc_nome": nome_pc_exibicao(pc_id),
-                "data": data.strftime("%d/%m/%Y"),
-                "hora": data.strftime("%H:%M:%S"),
+                "nome": NOME_ARQUIVO,
+                "data": data.strftime(
+                    "%d/%m/%Y"
+                ),
+                "hora": data.strftime(
+                    "%H:%M:%S"
+                ),
                 "timestamp": dados.st_mtime
             })
+
+        except Exception:
+
+            continue
 
     arquivos.sort(
         key=lambda x: x["timestamp"],
@@ -318,110 +226,64 @@ def listar_arquivos():
 
     return jsonify({
         "sucesso": True,
-        "pc_id": pc_id,
         "arquivos": arquivos
     })
 
 
-# =========================================================
-# SOLICITAR ATUALIZAÇÃO PARA UM PC ESPECÍFICO
-# =========================================================
+# ============================================================
+# SOLICITAR ATUALIZAÇÃO
+# ============================================================
 
 @app.route("/atualizar", methods=["POST"])
 def atualizar():
-    pc_id = request.args.get("pc_id", "").strip()
 
-    if not pc_id:
-        dados = request.get_json(silent=True) or {}
-        pc_id = str(dados.get("pc_id", "")).strip()
+    global atualizacao_solicitada
 
-    if not pc_id:
-        return jsonify({
-            "sucesso": False,
-            "erro": "pc_id não informado."
-        }), 400
+    atualizacao_solicitada = True
 
-    pc = obter_dados_pc(pc_id)
-
-    if not pc:
-        return jsonify({
-            "sucesso": False,
-            "erro": "Computador não encontrado."
-        }), 404
-
-    with lock_pcs:
-        pcs[pc_id]["atualizacao_solicitada"] = True
-
+    print()
     print("======================================")
     print("Pedido de atualização recebido.")
-    print("PC:", pc_id)
-    print("Nome:", pc.get("nome"))
+    print("Aguardando PC secundário...")
+    print("======================================")
+    print()
 
     return jsonify({
         "sucesso": True,
-        "pc_id": pc_id,
-        "pc_nome": pc.get("nome"),
         "mensagem": "Pedido enviado ao PC secundário."
     })
 
 
-# =========================================================
-# PC SECUNDÁRIO VERIFICA SE TEM ATUALIZAÇÃO
-# =========================================================
+# ============================================================
+# VERIFICAR PEDIDO DE ATUALIZAÇÃO
+# ============================================================
 
 @app.route("/verificar")
 def verificar():
-    pc_id = request.args.get("pc_id", "").strip()
 
-    if not pc_id:
-        return jsonify({
-            "atualizar": False,
-            "erro": "pc_id não informado."
-        }), 400
+    global atualizacao_solicitada
 
-    pc = obter_dados_pc(pc_id)
+    pedido = atualizacao_solicitada
 
-    if not pc:
-        garantir_pc(pc_id, pc_id)
-        return jsonify({
-            "atualizar": False
-        })
-
-    with lock_pcs:
-        atualizar_pedido = bool(
-            pcs[pc_id].get("atualizacao_solicitada")
-        )
+    # O pedido é consumido imediatamente.
+    atualizacao_solicitada = False
 
     return jsonify({
-        "atualizar": atualizar_pedido
+        "atualizar": pedido
     })
 
 
-# =========================================================
-# PC INFORMANDO QUE NÃO POSSUI ARQUIVO
-# =========================================================
+# ============================================================
+# PC NÃO POSSUI ARQUIVO
+# ============================================================
 
 @app.route("/sem_arquivo", methods=["POST"])
 def sem_arquivo():
-    pc_id = request.args.get("pc_id", "").strip()
 
-    if not pc_id:
-        dados = request.get_json(silent=True) or {}
-        pc_id = str(dados.get("pc_id", "")).strip()
-
-    if not pc_id:
-        return jsonify({
-            "sucesso": False,
-            "erro": "pc_id não informado."
-        }), 400
-
-    with lock_pcs:
-        if pc_id in pcs:
-            pcs[pc_id]["atualizacao_solicitada"] = False
-
+    print()
     print("Pedido de atualização cancelado:")
     print("nenhum config_te.txt disponível.")
-    print("PC:", pc_id)
+    print()
 
     return jsonify({
         "sucesso": True,
@@ -429,117 +291,143 @@ def sem_arquivo():
     })
 
 
-# =========================================================
-# UPLOAD
-# =========================================================
+# ============================================================
+# RECEBER UPLOAD
+# ============================================================
 
 @app.route("/upload", methods=["POST"])
 def upload():
-    arquivo = request.files.get("arquivo")
 
-    pc_id = request.form.get("pc_id", "").strip()
-    pc_nome = request.form.get("pc_nome", "").strip()
+    global atualizacao_solicitada
+    global ultimo_upload_manual
 
-    if not pc_id:
-        return jsonify({
-            "sucesso": False,
-            "erro": "pc_id não informado."
-        }), 400
+    if "arquivo" not in request.files:
 
-    if not arquivo:
         return jsonify({
             "sucesso": False,
             "erro": "Arquivo não enviado."
         }), 400
 
-    if not (arquivo.filename or "").lower().endswith(".txt"):
+    arquivo = request.files["arquivo"]
+
+    if not arquivo.filename:
+
         return jsonify({
             "sucesso": False,
             "erro": "Arquivo inválido."
         }), 400
 
-    garantir_pc(pc_id, pc_nome or pc_id)
-
     agora = agora_brasil()
 
     nome = (
-        f"config_te_"
-        f"{agora.strftime('%Y-%m-%d_%H-%M-%S')}.txt"
+        "config_te_"
+        + agora.strftime(
+            "%Y-%m-%d_%H-%M-%S"
+        )
+        + ".txt"
     )
 
-    pasta = pasta_do_pc(pc_id)
-    caminho = pasta / nome
+    caminho = PASTA_ARQUIVOS / nome
+
+    contador = 1
+
+    while caminho.exists():
+
+        nome = (
+            "config_te_"
+            + agora.strftime(
+                "%Y-%m-%d_%H-%M-%S"
+            )
+            + f"_{contador}.txt"
+        )
+
+        caminho = PASTA_ARQUIVOS / nome
+
+        contador += 1
 
     try:
+
         arquivo.save(caminho)
+
     except Exception as erro:
-        print("Erro ao salvar arquivo:", erro)
+
+        print("Erro ao salvar arquivo:")
+        print(erro)
 
         return jsonify({
             "sucesso": False,
             "erro": str(erro)
         }), 500
 
-    print("Arquivo recebido:", nome)
-    print("PC:", pc_id)
-    print("Nome:", pc_nome or pc_id)
+    print()
+    print(f"Arquivo recebido: {nome}")
 
-    # Mantém no máximo MAXIMO_ARQUIVOS por computador.
-    try:
-        arquivos = [
-            item for item in pasta.iterdir()
-            if item.is_file() and item.name.startswith("config_te_")
-        ]
+    arquivos = [
+        item
+        for item in PASTA_ARQUIVOS.iterdir()
+        if item.is_file()
+    ]
 
-        arquivos.sort(
-            key=lambda item: item.stat().st_mtime
-        )
+    arquivos.sort(
+        key=lambda item: item.stat().st_mtime
+    )
 
-        while len(arquivos) > MAXIMO_ARQUIVOS:
-            arquivo_antigo = arquivos.pop(0)
+    while len(arquivos) > MAXIMO_ARQUIVOS:
 
-            try:
-                arquivo_antigo.unlink()
-                print(
-                    "Arquivo antigo excluído:",
-                    arquivo_antigo.name
-                )
-            except Exception as erro:
-                print(
-                    "Erro ao excluir arquivo antigo:",
-                    erro
-                )
+        arquivo_antigo = arquivos.pop(0)
 
-    except Exception as erro:
-        print("Erro ao organizar arquivos:", erro)
+        try:
 
-    with lock_pcs:
-        if pc_id in pcs:
-            pcs[pc_id]["atualizacao_solicitada"] = False
+            arquivo_antigo.unlink()
+
+            print(
+                "Arquivo antigo excluído:"
+            )
+
+            print(
+                arquivo_antigo.name
+            )
+
+        except Exception as erro:
+
+            print(
+                "Erro ao excluir arquivo antigo:"
+            )
+
+            print(erro)
+
+    atualizacao_solicitada = False
+
+    ultimo_upload_manual = time.time()
+
+    print("Upload concluído com sucesso.")
+    print()
 
     return jsonify({
         "sucesso": True,
         "arquivo": nome,
-        "pc_id": pc_id,
-        "pc_nome": pc_nome or pc_id,
-        "data": agora.strftime("%d/%m/%Y"),
-        "hora": agora.strftime("%H:%M:%S")
+        "data": agora.strftime(
+            "%d/%m/%Y"
+        ),
+        "hora": agora.strftime(
+            "%H:%M:%S"
+        )
     })
 
 
-# =========================================================
+# ============================================================
 # BAIXAR ARQUIVO
-# =========================================================
+# ============================================================
 
-@app.route("/baixar/<pc_id>/<nome>")
-def baixar(pc_id, nome):
-    pc_id = os.path.basename(pc_id)
+@app.route("/baixar/<nome>")
+def baixar(nome):
+
     nome = os.path.basename(nome)
 
-    pasta = pasta_do_pc(pc_id)
-    caminho = pasta / nome
+    caminho = PASTA_ARQUIVOS / nome
 
-    if not caminho.exists() or not caminho.is_file():
+    if not caminho.exists():
+
         return jsonify({
             "erro": "Arquivo não encontrado."
         }), 404
@@ -551,103 +439,31 @@ def baixar(pc_id, nome):
     )
 
 
-# =========================================================
-# EXCLUIR COMPUTADOR INTEIRO
-# =========================================================
-
-@app.route("/excluir_pc/<pc_id>", methods=["DELETE"])
-def excluir_pc(pc_id):
-    pc_id = os.path.basename(pc_id).strip()
-
-    if not pc_id:
-        return jsonify({
-            "sucesso": False,
-            "erro": "pc_id não informado."
-        }), 400
-
-    # Remove o cadastro do computador da memória.
-    with lock_pcs:
-        existia = pc_id in pcs
-
-        if existia:
-            del pcs[pc_id]
-
-    # Remove todos os arquivos armazenados desse computador.
-    pasta = PASTA_ARQUIVOS / pc_id
-
-    arquivos_excluidos = 0
-
-    try:
-        if pasta.exists() and pasta.is_dir():
-
-            for item in pasta.iterdir():
-                try:
-                    if item.is_file() or item.is_symlink():
-                        item.unlink()
-                        arquivos_excluidos += 1
-
-                    elif item.is_dir():
-                        import shutil
-                        shutil.rmtree(item)
-                        arquivos_excluidos += 1
-
-                except Exception as erro:
-                    print(
-                        "Erro ao excluir item do PC:",
-                        item,
-                        erro
-                    )
-
-            try:
-                pasta.rmdir()
-            except OSError:
-                pass
-
-    except Exception as erro:
-        print("Erro ao excluir pasta do PC:", erro)
-
-        return jsonify({
-            "sucesso": False,
-            "erro": "O PC foi removido, mas houve erro ao apagar os arquivos."
-        }), 500
-
-    print("======================================")
-    print("COMPUTADOR EXCLUÍDO")
-    print("PC:", pc_id)
-    print("Cadastro existia:", existia)
-    print("Arquivos excluídos:", arquivos_excluidos)
-
-    return jsonify({
-        "sucesso": True,
-        "pc_id": pc_id,
-        "arquivos_excluidos": arquivos_excluidos,
-        "mensagem": "Computador excluído com sucesso."
-    })
-
-
-# =========================================================
+# ============================================================
 # EXCLUIR ARQUIVO
-# =========================================================
+# ============================================================
 
-@app.route("/excluir/<pc_id>/<nome>", methods=["DELETE"])
-def excluir(pc_id, nome):
-    pc_id = os.path.basename(pc_id)
+@app.route("/excluir/<nome>", methods=["DELETE"])
+def excluir(nome):
+
     nome = os.path.basename(nome)
 
-    pasta = pasta_do_pc(pc_id)
-    caminho = pasta / nome
+    caminho = PASTA_ARQUIVOS / nome
 
-    if not caminho.exists() or not caminho.is_file():
+    if not caminho.exists():
+
         return jsonify({
             "sucesso": False,
             "erro": "Arquivo não encontrado."
         }), 404
 
     try:
+
         caminho.unlink()
 
-        print("Arquivo excluído:", nome)
-        print("PC:", pc_id)
+        print(
+            f"Arquivo excluído: {nome}"
+        )
 
         return jsonify({
             "sucesso": True,
@@ -655,7 +471,6 @@ def excluir(pc_id, nome):
         })
 
     except Exception as erro:
-        print("Erro ao excluir arquivo:", erro)
 
         return jsonify({
             "sucesso": False,
@@ -663,19 +478,31 @@ def excluir(pc_id, nome):
         }), 500
 
 
-# =========================================================
-# ENVIO DO PC SECUNDÁRIO PARA O SERVIDOR
-# =========================================================
+# ============================================================
+# ENVIAR ARQUIVO PARA O SERVIDOR
+# ============================================================
 
 def enviar_arquivo(caminho):
+
     if not SERVER_URL:
-        print("SERVER_URL não configurado.")
+
+        print(
+            "SERVER_URL não configurado."
+        )
+
         return False
 
     try:
-        with open(caminho, "rb") as arquivo:
+
+        with open(
+            caminho,
+            "rb"
+        ) as arquivo:
+
             resposta = requests.post(
+
                 SERVER_URL + "/upload",
+
                 files={
                     "arquivo": (
                         NOME_ARQUIVO,
@@ -683,94 +510,145 @@ def enviar_arquivo(caminho):
                         "text/plain"
                     )
                 },
-                data={
-                    "pc_id": PC_ID,
-                    "pc_nome": PC_NOME
-                },
+
                 timeout=30
             )
 
         if resposta.status_code == 200:
-            print("config_te.txt enviado com sucesso.")
+
+            print(
+                "config_te.txt enviado com sucesso."
+            )
 
             try:
+
                 caminho.unlink()
+
                 print(
-                    "config_te.txt excluído do PC secundário."
+                    "config_te.txt excluído "
+                    "do PC secundário."
                 )
+
             except Exception as erro:
+
                 print(
-                    "Erro ao excluir config_te.txt:",
-                    erro
+                    "Erro ao excluir "
+                    "config_te.txt:"
                 )
+
+                print(erro)
 
             return True
 
-        print(
-            "Erro no upload:",
-            resposta.status_code,
-            resposta.text
-        )
+        print("Erro no upload:")
+
+        print(resposta.text)
 
         return False
 
     except Exception as erro:
-        print("Erro ao enviar:", erro)
+
+        print("Erro ao enviar:")
+
+        print(erro)
+
         return False
 
 
-# =========================================================
+# ============================================================
 # HEARTBEAT DO PC SECUNDÁRIO
-# =========================================================
+# ============================================================
 
 def enviar_heartbeat():
+
     while True:
-        if SERVER_URL:
-            try:
-                resposta = requests.post(
-                    SERVER_URL + "/heartbeat",
-                    json={
-                        "pc_id": PC_ID,
-                        "pc_nome": PC_NOME
-                    },
-                    timeout=10
+
+        try:
+
+            resposta = requests.post(
+                SERVER_URL + "/heartbeat",
+                timeout=10
+            )
+
+            if resposta.status_code == 200:
+
+                print(
+                    "PC conectado ao servidor."
                 )
 
-                if resposta.status_code == 200:
-                    print(
-                        "PC conectado ao servidor:",
-                        PC_NOME
-                    )
-                else:
-                    print("Servidor não disponível.")
+        except Exception:
 
-            except Exception:
-                print("Servidor não disponível.")
+            print(
+                "Servidor não disponível."
+            )
 
         time.sleep(INTERVALO)
 
 
-# =========================================================
-# EXECUÇÃO DO PC SECUNDÁRIO
-# =========================================================
+# ============================================================
+# FUNCIONAMENTO DO PC SECUNDÁRIO
+# ============================================================
 
 def executar_computador():
+
     if not SERVER_URL:
-        print("ERRO: SERVER_URL não configurado.")
+
+        print()
+        print(
+            "ERRO: SERVER_URL não configurado."
+        )
+        print()
+
         return
 
+    # Caminho absoluto baseado na localização
+    # do servidor.py.
+    caminho = CAMINHO_ARQUIVO
+
+    print()
     print("==============================")
-    print("       SITEKEY - HOST")
+    print("       SITEKEY - PC")
     print("==============================")
-    print("Servidor:", SERVER_URL)
-    print("PC ID:", PC_ID)
-    print("PC Nome:", PC_NOME)
-    print("Arquivo:", CAMINHO_ARQUIVO)
-    print("Pasta do programa:", PASTA_PROGRAMA)
-    print("Envio automático: todos os dias às 13:00")
-    print("Horário: GMT-3 / Brasil")
-    print("Máximo de arquivos por PC:", MAXIMO_ARQUIVOS)
-    print("Excluir após envio: SIM")
+    print()
+
+    print(
+        "Servidor:",
+        SERVER_URL
+    )
+
+    print(
+        "Arquivo:",
+        caminho
+    )
+
+    print(
+        "Pasta do programa:",
+        PASTA_PROGRAMA
+    )
+
+    print(
+        "Envio automático: "
+        "todos os dias às 13:00"
+    )
+
+    print(
+        "Horário: GMT-3 / Brasil"
+    )
+
+    print(
+        "Máximo de arquivos:",
+        MAXIMO_ARQUIVOS
+    )
+
+    print(
+        "Excluir após envio: SIM"
+    )
+
+    print()
+
+    # ========================================================
+    # HEARTBEAT
+    # ========================================================
 
     thread_heartbeat = threading.Thread(
         target=enviar_heartbeat,
@@ -779,147 +657,278 @@ def executar_computador():
 
     thread_heartbeat.start()
 
+    # ========================================================
+    # CONTROLE DO ENVIO AUTOMÁTICO
+    # ========================================================
+
+    arquivo_controle = ARQUIVO_CONTROLE
+
     ultimo_dia_automatico = ""
 
-    try:
-        if ARQUIVO_CONTROLE.exists():
+    if arquivo_controle.exists():
+
+        try:
+
             ultimo_dia_automatico = (
-                ARQUIVO_CONTROLE
-                .read_text(encoding="utf-8")
+                arquivo_controle
+                .read_text()
                 .strip()
             )
-    except Exception:
-        ultimo_dia_automatico = ""
+
+        except Exception:
+
+            ultimo_dia_automatico = ""
+
+    # ========================================================
+    # LOOP PRINCIPAL
+    # ========================================================
 
     while True:
-        try:
-            agora = agora_brasil()
-            data_atual = agora.strftime("%Y-%m-%d")
 
-            # Verifica se este PC recebeu pedido manual.
-            resposta = requests.get(
-                SERVER_URL + "/verificar",
-                params={"pc_id": PC_ID},
-                timeout=10
+        try:
+
+            agora = agora_brasil()
+
+            data_atual = agora.strftime(
+                "%Y-%m-%d"
             )
 
-            if resposta.status_code == 200:
-                dados_pedido = resposta.json()
+            # =================================================
+            # VERIFICAR PEDIDO MANUAL
+            # =================================================
 
-                if dados_pedido.get("atualizar"):
-                    print("================================")
-                    print("Pedido manual recebido.")
+            try:
 
-                    if CAMINHO_ARQUIVO.exists():
-                        print("Enviando config_te.txt...")
+                resposta = requests.get(
+                    SERVER_URL + "/verificar",
+                    timeout=10
+                )
+
+                if resposta.status_code == 200:
+
+                    dados_pedido = (
+                        resposta.json()
+                    )
+
+                    if dados_pedido.get(
+                        "atualizar"
+                    ):
+
+                        print()
+                        print(
+                            "================================"
+                        )
+
+                        print(
+                            "Pedido manual recebido."
+                        )
+
+                        print(
+                            "================================"
+                        )
+
+                        # -------------------------------------
+                        # VERIFICAR ARQUIVO
+                        # -------------------------------------
+
+                        if not caminho.exists():
+
+                            print(
+                                "Nenhum config_te.txt "
+                                "disponível para enviar."
+                            )
+
+                            try:
+
+                                requests.post(
+                                    SERVER_URL
+                                    + "/sem_arquivo",
+                                    timeout=10
+                                )
+
+                            except Exception:
+
+                                pass
+
+                            time.sleep(2)
+
+                            continue
+
+                        # -------------------------------------
+                        # ENVIAR
+                        # -------------------------------------
+
+                        print(
+                            "Enviando config_te.txt..."
+                        )
 
                         sucesso = enviar_arquivo(
-                            CAMINHO_ARQUIVO
+                            caminho
                         )
 
                         if sucesso:
+
                             print(
-                                "Atualização manual concluída."
+                                "Atualização manual "
+                                "concluída."
                             )
+
                         else:
+
                             print(
                                 "Falha no envio manual."
                             )
 
-                    else:
-                        print(
-                            "Nenhum config_te.txt disponível "
-                            "para enviar."
+                        time.sleep(2)
+
+                        continue
+
+            except requests.exceptions.RequestException:
+
+                pass
+
+            # =================================================
+            # ENVIO AUTOMÁTICO
+            # =================================================
+
+            if caminho.exists():
+
+                passou_do_horario = (
+
+                    agora.hour > HORA_ENVIO
+
+                    or (
+
+                        agora.hour == HORA_ENVIO
+
+                        and agora.minute >= MINUTO_ENVIO
+
+                    )
+                )
+
+                if (
+
+                    passou_do_horario
+
+                    and data_atual
+                    != ultimo_dia_automatico
+
+                ):
+
+                    print()
+                    print(
+                        "================================"
+                    )
+
+                    print(
+                        "Horário automático atingido."
+                    )
+
+                    print(
+                        "Horário programado: 13:00"
+                    )
+
+                    print(
+                        "Enviando config_te.txt..."
+                    )
+
+                    print(
+                        "================================"
+                    )
+
+                    sucesso = enviar_arquivo(
+                        caminho
+                    )
+
+                    if sucesso:
+
+                        ultimo_dia_automatico = (
+                            data_atual
                         )
 
                         try:
-                            requests.post(
-                                SERVER_URL + "/sem_arquivo",
-                                params={"pc_id": PC_ID},
-                                timeout=2
+
+                            arquivo_controle.write_text(
+                                ultimo_dia_automatico
                             )
-                        except requests.exceptions.RequestException:
-                            pass
 
-            # =================================================
-            # ENVIO AUTOMÁTICO DIÁRIO
-            # =================================================
-
-            passou_do_horario = (
-                agora.hour > HORA_ENVIO
-                or (
-                    agora.hour == HORA_ENVIO
-                    and agora.minute >= MINUTO_ENVIO
-                )
-            )
-
-            if (
-                passou_do_horario
-                and ultimo_dia_automatico != data_atual
-            ):
-                print("Horário automático atingido.")
-                print("Horário programado: 13:00")
-
-                if CAMINHO_ARQUIVO.exists():
-                    if enviar_arquivo(CAMINHO_ARQUIVO):
-                        ultimo_dia_automatico = data_atual
-
-                        try:
-                            ARQUIVO_CONTROLE.write_text(
-                                data_atual,
-                                encoding="utf-8"
-                            )
                         except Exception as erro:
+
                             print(
-                                "Erro ao salvar controle:",
-                                erro
+                                "Erro ao salvar controle:"
                             )
+
+                            print(erro)
 
                         print(
                             "Envio automático concluído."
                         )
+
                         print(
-                            "Próximo envio: amanhã às 13:00."
+                            "Próximo envio: "
+                            "amanhã às 13:00."
                         )
+
                     else:
+
                         print(
                             "Upload automático falhou."
                         )
 
-                else:
-                    # Marca o dia como processado mesmo sem arquivo.
-                    ultimo_dia_automatico = data_atual
+            # =================================================
+            # AGUARDAR
+            # =================================================
 
-                    try:
-                        ARQUIVO_CONTROLE.write_text(
-                            data_atual,
-                            encoding="utf-8"
-                        )
-                    except Exception as erro:
-                        print(
-                            "Erro ao salvar controle:",
-                            erro
-                        )
-
-            time.sleep(INTERVALO)
-
-        except requests.exceptions.RequestException:
             time.sleep(INTERVALO)
 
         except Exception as erro:
-            print("Erro no computador:", erro)
+
+            print()
+            print(
+                "Erro no computador:"
+            )
+
+            print(erro)
+
             time.sleep(INTERVALO)
 
 
-# =========================================================
+# ============================================================
 # INICIALIZAÇÃO
-# =========================================================
+# ============================================================
 
 if __name__ == "__main__":
+
     if MODO == "secundario":
+
         executar_computador()
+
     else:
-        porta = int(os.environ.get("PORT", "5000"))
+
+        print()
+        print("==============================")
+        print("          SITEKEY")
+        print("==============================")
+        print()
+
+        print(
+            "Pasta do programa:",
+            PASTA_PROGRAMA
+        )
+
+        print(
+            "Pasta dos arquivos:",
+            PASTA_ARQUIVOS
+        )
+
+        print()
+
+        porta = int(
+            os.environ.get(
+                "PORT",
+                "5000"
+            )
+        )
 
         app.run(
             host="0.0.0.0",
